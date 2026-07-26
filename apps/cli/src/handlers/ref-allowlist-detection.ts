@@ -5,33 +5,55 @@
  *
  * Spec: docs/specs/2026-04-29-ref-allowlist-enforcement.md §"Phase 1 Minimum Viable"
  *
- * Captures origin/master SHA at dispatch time. On relay completion, checks
- * whether origin/master moved without a corresponding PR-merge commit.
- * On violation: appends to .gossip/process-violations.jsonl, records a
- * boundary_escape signal with category process_discipline, and prints a
- * prominent stderr message. No auto-revert — operator must confirm.
+ * Captures the origin default-branch SHA at dispatch time (base ref resolved
+ * via base-ref-discovery.ts — GOSSIP_BASE_REF override, then origin/HEAD,
+ * then origin/master/origin/main fallback; see issue #658). On relay
+ * completion, checks whether that ref moved without a corresponding
+ * PR-merge commit. On violation: appends to .gossip/process-violations.jsonl,
+ * records a boundary_escape signal with category process_discipline, and
+ * prints a prominent stderr message. No auto-revert — operator must confirm.
  */
 import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
+import { discoverBaseRef } from './base-ref-discovery';
 
 const PROCESS_VIOLATIONS_FILE = '.gossip/process-violations.jsonl';
 
+function execFileForBaseRef(cmd: string, args: string[], opts: { cwd: string; encoding: 'utf8' }): string {
+  // stdio ignores stderr to match every other git call in this file — without
+  // it, git `fatal:` lines leak to the terminal, which is the exact noise class
+  // issue #658 set out to remove.
+  // .toString() is a no-op when execFileSync already honored `encoding` and
+  // returned a string; it correctly decodes a Buffer when a test double (or a
+  // future refactor) returns one despite the encoding option.
+  return execFileSync(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+}
+
 /**
- * Capture origin/master SHA before dispatching a task.
- * Returns null on git failure (offline, no remote, no repo) — never blocks dispatch.
+ * Capture the origin default-branch SHA before dispatching a task.
+ * Returns null on git failure (offline, no remote, no repo, or no resolvable
+ * base ref) — never blocks dispatch.
  */
 export function capturePreDispatchSha(): string | null {
+  const cwd = process.cwd();
+  const { ref, diagnostic } = discoverBaseRef(cwd, execFileForBaseRef);
+  if (!ref) {
+    process.stderr.write(
+      `[gossipcat] ref-allowlist: could not resolve a base ref (${diagnostic}) — skipping pre-dispatch snapshot\n`,
+    );
+    return null;
+  }
   try {
-    const sha = execFileSync('git', ['rev-parse', 'origin/master'], {
-      cwd: process.cwd(),
+    const sha = execFileSync('git', ['rev-parse', ref], {
+      cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .toString()
       .trim();
     return sha || null;
   } catch {
-    process.stderr.write('[gossipcat] ref-allowlist: could not read origin/master SHA (offline or no remote) — skipping pre-dispatch snapshot\n');
+    process.stderr.write(`[gossipcat] ref-allowlist: could not read ${ref} SHA (offline or no remote) — skipping pre-dispatch snapshot\n`);
     return null;
   }
 }
@@ -97,19 +119,24 @@ function appendViolationRecord(record: {
 }
 
 /**
- * Check whether origin/master moved during a task without a PR-merge entry.
- * Emits boundary_escape signal + appends to process-violations.jsonl on violation.
- * Call this at relay-completion time for any task that had a preDispatchSha captured.
+ * Check whether the origin default branch moved during a task without a
+ * PR-merge entry. Emits boundary_escape signal + appends to
+ * process-violations.jsonl on violation. Call this at relay-completion time
+ * for any task that had a preDispatchSha captured.
  */
 export function checkRefAllowlistViolation(
   taskId: string,
   agentId: string,
   preSha: string,
 ): void {
+  const cwd = process.cwd();
+  const { ref } = discoverBaseRef(cwd, execFileForBaseRef);
+  if (!ref) return; // Can't resolve base ref — skip detection, don't false-positive
+
   let postSha: string;
   try {
-    postSha = execFileSync('git', ['rev-parse', 'origin/master'], {
-      cwd: process.cwd(),
+    postSha = execFileSync('git', ['rev-parse', ref], {
+      cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .toString()
@@ -125,7 +152,7 @@ export function checkRefAllowlistViolation(
   const mergeCommits = getPrMergeCommits(preSha, postSha);
   if (mergeCommits.length > 0) return; // Legitimate PR merge — no violation
 
-  // Violation: origin/master moved with no PR-merge entry
+  // Violation: the base ref moved with no PR-merge entry
   const allCommits = getCommitRange(preSha, postSha);
   const detectedAt = new Date().toISOString();
 
@@ -143,7 +170,7 @@ export function checkRefAllowlistViolation(
         findingId: `proc:${taskId}:master_push`,
         category: 'process_discipline',
         severity: 'high',
-        evidence: `origin/master moved from ${preSha} to ${postSha} during task ${taskId} without a PR-merge entry — direct push detected. Commits: ${allCommits.slice(0, 5).join('; ')}`,
+        evidence: `${ref} moved from ${preSha} to ${postSha} during task ${taskId} without a PR-merge entry — direct push detected. Commits: ${allCommits.slice(0, 5).join('; ')}`,
         timestamp: detectedAt,
       },
     ]);
@@ -152,7 +179,7 @@ export function checkRefAllowlistViolation(
   }
 
   process.stderr.write(
-    `\nREF-ALLOWLIST VIOLATION: ${taskId} agent=${agentId} origin/master moved ${preSha.slice(0, 8)}→${postSha.slice(0, 8)} with no PR merge.\n` +
+    `\nREF-ALLOWLIST VIOLATION: ${taskId} agent=${agentId} ${ref} moved ${preSha.slice(0, 8)}→${postSha.slice(0, 8)} with no PR merge.\n` +
       `Operator confirmation required for revert or retroactive PR.\n` +
       `Full audit trail at .gossip/process-violations.jsonl\n\n`,
   );

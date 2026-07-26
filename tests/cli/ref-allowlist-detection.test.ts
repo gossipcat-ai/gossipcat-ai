@@ -37,6 +37,7 @@ jest.mock('fs', () => ({
 // ── imports after mocks ──────────────────────────────────────────────────────
 
 import { capturePreDispatchSha, checkRefAllowlistViolation } from '../../apps/cli/src/handlers/ref-allowlist-detection';
+import { resetBaseRefDiscoveryCache } from '../../apps/cli/src/handlers/base-ref-discovery';
 import { emitConsensusSignals } from '@gossip/orchestrator';
 
 const mockExecFileSync = childProcess.execFileSync as jest.Mock;
@@ -53,6 +54,7 @@ const POST_SHA = 'ffff6666gggg7777hhhh8888iiii9999jjjj0000';
 describe('capturePreDispatchSha', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetBaseRefDiscoveryCache();
   });
 
   it('returns the trimmed SHA on success', () => {
@@ -71,6 +73,7 @@ describe('capturePreDispatchSha', () => {
 describe('checkRefAllowlistViolation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetBaseRefDiscoveryCache();
   });
 
   it('(a) SHA unchanged → no signal, no JSONL append', () => {
@@ -165,16 +168,33 @@ describe('checkRefAllowlistViolation', () => {
     expect(mockAppendFileSync).not.toHaveBeenCalled();
   });
 
-  it('(e) preDispatchSha null → no detection, no false positive', () => {
-    // Should not be called if null — guard is in caller (dispatch/relay).
-    // But also verify that passing a null-like value short-circuits cleanly.
-    // The real guard lives in handleNativeRelay: `if (taskInfo.preDispatchSha)`.
-    // This test verifies checkRefAllowlistViolation handles a post-SHA read
-    // failure gracefully (no throw, no signal).
+  it('(e) every git call fails → base ref never resolves, detection skipped cleanly', () => {
+    // Every git invocation throws, so base-ref discovery itself fails and
+    // checkRefAllowlistViolation takes the `if (!ref) return` early exit. This
+    // is the "no base ref" path, NOT the postSha-read-failure path — see (e2),
+    // which isolates that separately.
     mockExecFileSync.mockImplementation(() => { throw new Error('git: command not found'); });
 
-    // Should not throw
     expect(() => checkRefAllowlistViolation('task-null', 'sonnet-implementer', PRE_SHA)).not.toThrow();
+
+    expect(mockEmitSignals).not.toHaveBeenCalled();
+    expect(mockAppendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('(e2) base ref resolves but the postSha read fails → no throw, no false positive', () => {
+    // Isolates the postSha try/catch: discovery succeeds, then the `rev-parse
+    // <ref>` that reads the CURRENT sha fails. Without this, (e) masked the
+    // branch because it broke discovery before postSha was ever attempted.
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      const key = (args as string[]).join(' ');
+      if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') return 'refs/remotes/origin/master\n';
+      if (key === 'rev-parse --verify --quiet origin/master') return `${PRE_SHA}\n`;
+      // The post-dispatch SHA read is the one that fails.
+      if (key === 'rev-parse origin/master') throw new Error('fatal: bad object');
+      throw new Error(`unexpected git call: ${key}`);
+    });
+
+    expect(() => checkRefAllowlistViolation('task-postsha', 'sonnet-implementer', PRE_SHA)).not.toThrow();
 
     expect(mockEmitSignals).not.toHaveBeenCalled();
     expect(mockAppendFileSync).not.toHaveBeenCalled();

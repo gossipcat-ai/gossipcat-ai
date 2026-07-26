@@ -97,10 +97,12 @@ export interface NativeTaskInfo {
    */
   memoryQueryCalled?: boolean;
   /**
-   * origin/master SHA captured just before the agent was dispatched.
+   * Origin default-branch SHA captured just before the agent was dispatched
+   * (base ref resolved via base-ref-discovery.ts — GOSSIP_BASE_REF override,
+   * then origin/HEAD, then origin/master/origin/main fallback; issue #658).
    * Used by the ref-allowlist detection layer (Phase 1) to detect direct
-   * pushes to master without a PR-merge entry.
-   * Null when git is unavailable (offline / no remote).
+   * pushes to the origin default branch without a PR-merge entry.
+   * Null when git is unavailable (offline / no remote) or no base ref resolves.
    */
   preDispatchSha?: string | null;
   /**

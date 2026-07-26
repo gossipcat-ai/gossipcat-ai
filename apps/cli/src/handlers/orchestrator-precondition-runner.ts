@@ -27,6 +27,7 @@ import type { PerformanceSignal } from '@gossip/orchestrator';
 // Dynamic import() is NOT bundled in esbuild single-file builds — this was the
 // root cause of the activity-mirror hooks silently no-op'ing (project_activity_mirror_v2_progress).
 import { emitPipelineSignals as staticEmitPipelineSignals } from '@gossip/orchestrator';
+import { discoverBaseRef } from './base-ref-discovery';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -89,6 +90,13 @@ export interface StaleBaseInputs {
   dispatchSha: string;
   originMasterSha: string;
   mergeBaseSha: string | null;
+  /**
+   * The base ref the SHAs above were read from (e.g. 'origin/main'). Carried so
+   * the operator warning and the emitted signal name the ACTUAL ref — on a
+   * main-default repo or with GOSSIP_BASE_REF set, a hardcoded 'origin/master'
+   * label describes a ref that was never consulted.
+   */
+  baseRef: string;
 }
 
 export interface PreconditionGuardAdditionalTask {
@@ -324,7 +332,9 @@ function defaultEmitSignals(projectRoot: string, signals: PerformanceSignal[]): 
 
 /**
  * Run the three git commands needed by detectStaleBase.
- * Returns null if git is unavailable, not in a repo, or origin/master is
+ * Returns null if git is unavailable, not in a repo, or the origin default
+ * branch (resolved via base-ref-discovery.ts — GOSSIP_BASE_REF override, then
+ * origin/HEAD, then origin/master/origin/main fallback; issue #658) is
  * unreachable. NEVER throws.
  */
 export async function gatherStaleBaseInputs(
@@ -332,22 +342,33 @@ export async function gatherStaleBaseInputs(
   execFile: PreconditionRunnerDeps['execFile'] = defaultExecFile,
 ): Promise<StaleBaseInputs | null> {
   try {
+    const { ref, diagnostic } = discoverBaseRef(projectRoot, execFile);
+    if (!ref) {
+      // Say so. Silently returning null disabled dispatched_stale_base with no
+      // operator-visible trace, so a misconfigured base ref looked like a
+      // healthy dispatch.
+      process.stderr.write(
+        `[gossipcat] stale-base check skipped — ${diagnostic ?? 'no base ref resolved'}\n`,
+      );
+      return null;
+    }
+
     const dispatchSha = execFile('git', ['rev-parse', 'HEAD'], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
 
-    const originMasterSha = execFile('git', ['rev-parse', 'origin/master'], {
+    const originMasterSha = execFile('git', ['rev-parse', ref], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
 
-    const mergeBaseSha = execFile('git', ['merge-base', 'HEAD', 'origin/master'], {
+    const mergeBaseSha = execFile('git', ['merge-base', 'HEAD', ref], {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
 
-    return { dispatchSha, originMasterSha, mergeBaseSha };
+    return { dispatchSha, originMasterSha, mergeBaseSha, baseRef: ref };
   } catch {
     return null;
   }
@@ -395,7 +416,7 @@ export async function runDispatchPreconditionGuard(
         const reason = staleResult.reason;
         warnings.push(
           `[dispatch-hygiene] stale base detected (${reason}): ` +
-          `dispatch SHA ${gitInputs.dispatchSha} is behind origin/master ` +
+          `dispatch SHA ${gitInputs.dispatchSha} is behind ${gitInputs.baseRef} ` +
           `${gitInputs.originMasterSha}. Pull and rebase before dispatching.`,
         );
         try {
@@ -407,6 +428,7 @@ export async function runDispatchPreconditionGuard(
             metadata: {
               reason,
               dispatchSha: gitInputs.dispatchSha,
+              baseRef: gitInputs.baseRef,
             },
             timestamp: new Date().toISOString(),
           }]);
