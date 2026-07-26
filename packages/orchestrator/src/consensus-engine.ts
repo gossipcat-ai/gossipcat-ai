@@ -1983,6 +1983,38 @@ Return only valid JSON.${skillsBlock}`;
    * Fix: additionally verify the path is NOT inside any currentWorktreeRoot
    * via isInsideAnyRoot, which applies realpath-safe containment checks.
    */
+  /**
+   * Realpath-normalize a path, tolerating non-existence: if the path itself
+   * doesn't exist, walk up to the nearest ancestor that does, realpath THAT,
+   * then re-append the missing tail. Falls back to resolve() when nothing in
+   * the chain exists. Never throws.
+   *
+   * This is the single normalization used for BOTH sides of every containment
+   * and root-prefix comparison. Symmetry is what makes the comparison agree
+   * with the kernel: on macOS /tmp is a symlink to /private/tmp, so a
+   * resolve()-only comparison reports a legitimate path as out-of-root (or a
+   * legitimate root as a non-prefix) purely because one side was realpath'd.
+   */
+  private realpathOrNearest(path: string): string {
+    const resolved = resolve(path);
+    try {
+      return realpathSync(resolved);
+    } catch { /* doesn't exist yet — walk up to the nearest existing ancestor */ }
+
+    let cur = resolved;
+    const tail: string[] = [];
+    while (true) {
+      const parent = dirname(cur);
+      if (parent === cur) return resolved; // reached fs root: nothing existed
+      tail.unshift(cur.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+      try {
+        return join(realpathSync(parent), ...tail);
+      } catch {
+        cur = parent;
+      }
+    }
+  }
+
   private isResolvedFromProjectRootOnly(filePath: string): boolean {
     if (this.currentWorktreeRoots.size === 0) return false;
     if (!this.config.projectRoot) return false;
@@ -2012,34 +2044,7 @@ Return only valid JSON.${skillsBlock}`;
    * (HIGH). Load-bearing for PR-B (#126 auto-discovery).
    */
   private isInsideAnyRoot(candidate: string, roots: string[]): boolean {
-    // Realpath-normalize the candidate. If it doesn't exist, walk up to the
-    // nearest ancestor that does, realpath that, then re-append the missing
-    // tail. This lets us catch symlinked ancestors even for not-yet-created
-    // files without bailing to unsafe prefix-only matching.
-    const resolvedCandidate = resolve(candidate);
-    let normalized = resolvedCandidate;
-    try {
-      normalized = realpathSync(resolvedCandidate);
-    } catch {
-      // Walk ancestors until one exists
-      let cur = resolvedCandidate;
-      const tail: string[] = [];
-      while (true) {
-        const parent = dirname(cur);
-        if (parent === cur) break; // reached root
-        const leaf = cur.slice(parent.length + (parent.endsWith(sep) ? 0 : 1));
-        tail.unshift(leaf);
-        try {
-          const realParent = realpathSync(parent);
-          normalized = tail.length ? join(realParent, ...tail) : realParent;
-          break;
-        } catch {
-          cur = parent;
-          // continue up
-        }
-      }
-      // If nothing in the chain exists, fall through with resolve()'d form.
-    }
+    const normalized = this.realpathOrNearest(candidate);
 
     // Resolve each root symmetrically. Prefer the precomputed realpath cache
     // (populated by updateWorktreeRoots) to avoid repeated syscalls; fall
@@ -2069,6 +2074,102 @@ Return only valid JSON.${skillsBlock}`;
     });
   }
 
+  /**
+   * Accept a candidate path iff it exists AND stays inside a valid root, with
+   * symlink-safe containment checked both before and after realpath. Shared by
+   * absolute-citation resolution and (conceptually) the relative loop below.
+   * Returns the realpath'd absolute path, or null if unusable.
+   */
+  private async acceptCandidate(candidate: string, allRoots: string[]): Promise<string | null> {
+    try {
+      if (!this.isInsideAnyRoot(candidate, allRoots)) return null;
+      // Directories pass stat() but can never satisfy a `file:line` citation.
+      // Without this gate a cite of `<root>/packages/orchestrator:12`
+      // "resolved", then cachedRead hit EISDIR and returned null — dropping the
+      // anchor silently instead of reporting an unresolvable citation.
+      if (!(await stat(candidate)).isFile()) return null;
+      // Fail CLOSED when realpath is unavailable. isInsideAnyRoot normalizes
+      // textually (resolve()), but stat/readFile let the kernel resolve `..`
+      // AFTER following symlinks — so realpath is the only check that sees
+      // where the path actually lands. Keeping the pre-realpath form here made
+      // the containment re-check below a no-op repeat of the pre-stat check.
+      const real = realpathSync(candidate);
+      if (this.isInsideAnyRoot(real, allRoots)) return real;
+    } catch { /* candidate does not exist here, or realpath is unavailable */ }
+    return null;
+  }
+
+  /**
+   * Resolve an ABSOLUTE citation path (issue #660).
+   *
+   * `join(root, '/abs/root/src/f.ts')` yields '/abs/root/abs/root/src/f.ts',
+   * which never exists — so before this path existed, every absolute citation
+   * failed anchor resolution even when the cited file was inside a configured
+   * root. Agents emit absolute paths routinely (they echo paths they just read
+   * via shell), and the failure silently depressed their accuracy scores.
+   *
+   * Two strategies, in order:
+   *  1. Strip a matching configured-root prefix and re-join the remainder
+   *     against each root in PRIORITY order. This repairs worktree-root
+   *     mismatches (resolutionRoots, issue #126): a cite of
+   *     `<projectRoot>/packages/foo.ts` for a file that also (or only) exists in
+   *     the worktree resolves against the worktree root. The prefix must itself
+   *     be a configured root, so this cannot widen the sandbox.
+   *  2. Fallback — take the path as-is, but ONLY if it is contained in a
+   *     configured root. Containment goes through isInsideAnyRoot (realpath +
+   *     `relative()` boundary), NOT a naive startsWith, so `/abs/root-evil/x`
+   *     does not pass for root `/abs/root`. This preserves the worktree
+   *     sandbox: an absolute path outside every configured root is never
+   *     resolved.
+   *
+   * Priority order is authoritative — step 1 runs FIRST for exactly that
+   * reason. When as-is acceptance came first, an absolute citation of a file
+   * present in BOTH projectRoot and a worktree root always returned the
+   * projectRoot (master HEAD) copy, because as-is only asked "is this inside
+   * ANY root?". That inverted the documented cachedResolveForAnchor contract —
+   * cross-reviewers verified findings against master instead of the branch
+   * under review, turning valid findings into refutations. It is also the
+   * common case: every PR review here runs with a worktree resolutionRoot and
+   * most cited files exist in both trees. Absolute cites now agree with
+   * bare-relative cites, which have always honoured priority order.
+   *
+   * Longest matching prefix wins in step 1 — worktrees are commonly nested
+   * under projectRoot, and the longer root yields the correct suffix.
+   *
+   * Prefix comparison is realpath-symmetric (realpathOrNearest on both sides).
+   * With resolve() only, a root reached through a symlink (the everyday macOS
+   * /tmp -> /private/tmp) never matched as a prefix, so strip-and-rejoin
+   * silently degraded to nothing.
+   */
+  private async resolveAbsoluteFileRef(
+    fileRef: string,
+    priorityRoots: string[],
+    allRoots: string[],
+  ): Promise<string | null> {
+    // resolve() FIRST — never hand a raw citation to acceptCandidate. An
+    // un-normalized `<root>/<symlinked-dir>/../secret.ts` passes the textual
+    // containment check while the kernel resolves it outside every root.
+    const abs = resolve(fileRef);
+    const absReal = this.realpathOrNearest(abs);
+
+    const prefixRoots = [...allRoots].sort(
+      (a, b) => this.realpathOrNearest(b).length - this.realpathOrNearest(a).length,
+    );
+    for (const prefixRoot of prefixRoots) {
+      const rel = relative(this.realpathOrNearest(prefixRoot), absReal);
+      // Not under this root (or identical to it) — nothing to strip.
+      if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) continue;
+      for (const root of priorityRoots) {
+        const hit = await this.acceptCandidate(join(root, rel), allRoots);
+        if (hit) return hit;
+      }
+    }
+
+    // No priority root yielded a hit: fall back to the cited location itself.
+    // Reachable when the containing root is absent from priorityRoots.
+    return this.acceptCandidate(abs, allRoots);
+  }
+
   private async resolveFilePath(
     fileRef: string,
     opts: { priorityRoots?: string[] } = {},
@@ -2084,6 +2185,13 @@ Return only valid JSON.${skillsBlock}`;
     const isBare = !fileRef.includes('/');
     const projectRoot = this.config.projectRoot ? resolve(this.config.projectRoot) : null;
 
+    // Absolute citations cannot be join()'d onto a root (issue #660) — handle
+    // them separately, then fall through to the relative loop on failure.
+    if (isAbsolute(fileRef)) {
+      const hit = await this.resolveAbsoluteFileRef(fileRef, roots, allRoots);
+      if (hit) return hit;
+    }
+
     // Try every root in order: projectRoot first (most files), then any
     // active worktree paths (for files only present on a feature branch).
     // Security boundary for isInsideAnyRoot uses allRoots (full set) so a
@@ -2096,11 +2204,12 @@ Return only valid JSON.${skillsBlock}`;
       try {
         const candidate = join(root, fileRef);
         if (this.isInsideAnyRoot(candidate, allRoots)) {
-          await stat(candidate);
+          // isFile(): a directory can never satisfy a `file:line` citation.
+          const isFile = (await stat(candidate)).isFile();
           // For non-bare refs, require matchesRelativePath against this root
           // so a monorepo sibling "packages/other/foo.ts" doesn't satisfy a
           // cite of "packages/target/foo.ts" by basename collision.
-          if (isBare || this.matchesRelativePath(rootAbs, resolve(candidate), fileRef)) {
+          if (isFile && (isBare || this.matchesRelativePath(rootAbs, resolve(candidate), fileRef))) {
             // Realpath & re-verify containment to close any symlink escape
             // introduced by the root itself.
             let real = candidate;
@@ -2114,8 +2223,7 @@ Return only valid JSON.${skillsBlock}`;
       if (fileName !== fileRef) {
         try {
           const candidate = join(root, fileName);
-          if (this.isInsideAnyRoot(candidate, allRoots)) {
-            await stat(candidate);
+          if (this.isInsideAnyRoot(candidate, allRoots) && (await stat(candidate)).isFile()) {
             let real = candidate;
             try { real = realpathSync(candidate); } catch { /* keep */ }
             if (this.isInsideAnyRoot(real, allRoots)) return real;
