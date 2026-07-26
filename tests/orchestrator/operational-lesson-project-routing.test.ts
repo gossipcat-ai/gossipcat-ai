@@ -54,7 +54,7 @@ describe('operational_lesson → lesson card', () => {
       lesson: 'Relay windows expire; merged work then produces no cognitive summaries.',
     }]);
     const files = readdirSync(knowledgeDir(root, 'orchestrator'));
-    expect(files).toEqual(['lesson-session_2026-07-26-a38286c2_relay-window-expired.md']);
+    expect(files).toEqual(['lesson-session.2026-07-26-a38286c2.relay-window-expired.33e0de0f.md']);
     const body = readFileSync(join(knowledgeDir(root, 'orchestrator'), files[0]), 'utf-8');
     expect(body).toContain('type: lesson');
     expect(body).toContain('signal: operational_lesson');
@@ -92,7 +92,7 @@ describe('cross-cutting lessons route to _project', () => {
       cross_cutting: true,
     }]);
     expect(readdirSync(knowledgeDir(root, PROJECT_LESSON_AGENT_ID)))
-      .toEqual(['lesson-session_2026-07-26-a38286c2_worktree-dist-mcp-zod.md']);
+      .toEqual(['lesson-session.2026-07-26-a38286c2.worktree-dist-mcp-zod.ef98efb5.md']);
     expect(existsSync(knowledgeDir(root, 'orchestrator'))).toBe(false);
   });
 

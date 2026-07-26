@@ -33,7 +33,10 @@
  * ## Path safety
  *
  * Both components become part of a filename: the card is written to
- * `.gossip/agents/<id>/memory/knowledge/lesson-session_<sessionId>_<slug>.md`.
+ * `.gossip/agents/<id>/memory/knowledge/lesson-session.<sessionId>.<slug>.<8hex>.md`
+ * (`memory-writer.ts` `lessonCardSlug` — `.` is the flattening separator
+ * because it is the one character `SAFE_NAME` can never emit, and the trailing
+ * digest of the full id keeps long ids from colliding at the length cap).
  * They are therefore validated with the project's existing `SAFE_NAME` regex
  * (`packages/orchestrator/src/skill-engine.ts`) — the SAME regex used to gate
  * agent ids and skill categories, not a second copy that could drift. Validation

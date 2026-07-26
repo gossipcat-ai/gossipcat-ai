@@ -22,7 +22,9 @@ describe('writeLessonCard', () => {
       taskTokens: 'foo.ts worktree resolution',
     });
     const files = readdirSync(knowledgeDir(root, 'sonnet-reviewer'));
-    expect(files).toEqual(['lesson-ab12cd34-ef56ab78_sonnet-reviewer_f1.md']);
+    // `.` (not `_`) joins the id components, plus sha256(finding_id)[0..8) — see
+    // the injectivity suite below for why both are load-bearing.
+    expect(files).toEqual(['lesson-ab12cd34-ef56ab78.sonnet-reviewer.f1.0d0ca10e.md']);
     const body = readFileSync(join(knowledgeDir(root, 'sonnet-reviewer'), files[0]), 'utf-8');
     expect(body).toContain('type: lesson');
     expect(body).toContain('**Why it failed:** Asserted absence');
