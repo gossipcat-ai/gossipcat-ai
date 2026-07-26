@@ -11,28 +11,99 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import * as dns from 'dns';
 import { ToolDefinition, LLMMessage } from '@gossip/types';
 import { LLMResponse } from './types';
 import { log as _log } from './log';
 import { recordAuthFailure, clearAuthFailure } from './auth-state';
+import { formatErrorWithCause, classifyTransportError } from './error-format';
 
-// ─── 503 Retry Helper ───────────────────────────────────────────────────────
+// ─── Optional IPv4-preference DNS toggle (issue #657) ──────────────────────
+//
+// HYPOTHESIS considered for #657 ("curl works, undici's fetch doesn't, from
+// the same host in the same minute"): curl performs classic Happy Eyeballs
+// (RFC 8305) — it races A/AAAA and uses whichever connects first — while
+// Node's global `fetch` resolves via `dns.lookup()`'s default result order and
+// does not itself race both families per attempt. If `dns.lookup` hands back
+// an AAAA (IPv6) record on a path where IPv6 is dark (blackholed rather than
+// simply absent), the connect attempt can hang for the OS-level TCP timeout
+// before undici ever surfaces a failure — which lines up with the reported
+// 89–168s latency far better than a fast DNS or connection-refused error would.
+//
+// CONCLUSION: plausible contributing factor, but UNCONFIRMED for this specific
+// incident — no packet capture / DNS trace was collected. This repo's
+// `engines.node` floor is >=22, which does not force IPv4 by default, and this
+// change does not either: silently forcing IPv4 process-wide to fix one
+// unconfirmed report would be a behavior change for every provider and every
+// environment, including ones where IPv6 is the working path. Instead this is
+// opt-in only: set GOSSIP_LLM_PREFER_IPV4=1 to flip Node's global DNS result
+// order so `dns.lookup` (which undici's fetch uses to resolve hosts) returns A
+// records before AAAA. Leave it unset and behavior is unchanged.
+if (process.env.GOSSIP_LLM_PREFER_IPV4 === '1') {
+  try {
+    dns.setDefaultResultOrder('ipv4first');
+    _log('llm-client', 'GOSSIP_LLM_PREFER_IPV4=1 — dns.setDefaultResultOrder("ipv4first")');
+  } catch { /* Node build without this API — no-op, opt-in has no effect */ }
+}
+
+// ─── Transport-retry constants ──────────────────────────────────────────────
+//
+// Bounded retry for socket/DNS/TLS-level failures ONLY (see
+// isRetryableTransportError) — never for an HTTP response the server actually
+// returned (4xx/5xx fail fast, exactly as before) and never for quota/429
+// (QuotaTracker owns that cooldown machinery; transport retries don't touch it)
+// or abort/cancellation.
+const TRANSPORT_RETRY_MAX_ATTEMPTS = 2; // additional attempts beyond the first (3 total)
+const TRANSPORT_RETRY_BACKOFF_MS = [1_000, 3_000];
 
 /**
- * Wraps fetch with one-shot retry on 503 (service unavailable / overloaded).
- * Many 503s clear within seconds — a single short retry recovers the request
- * before triggering the cooldown dance in QuotaTracker.handle503. If the retry
- * also returns 503, returns that response and lets the caller's handle503()
- * set the cooldown as before. The caller does NOT need to know whether a
- * retry happened.
+ * Abort-aware sleep: resolves after `ms`, or rejects immediately (with the
+ * signal's abort reason) if/when `signal` aborts first. Always clears its
+ * timer and removes its listener on either path — no dangling handle is left
+ * behind. Used for both the 503 retry sleep and the transport-retry backoff
+ * so a caller's `AbortSignal.timeout(...)` firing mid-backoff returns
+ * promptly instead of sleeping out the full window before the next attempt
+ * (or lack thereof) notices.
+ */
+function sleepAbortable(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Sleep aborted'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error('Sleep aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+// ─── 503 + Transport Retry Helper ──────────────────────────────────────────
+
+/**
+ * One-shot retry on 503 (service unavailable / overloaded). Many 503s clear
+ * within seconds — a single short retry recovers the request before
+ * triggering the cooldown dance in QuotaTracker.handle503. If the retry also
+ * returns 503, returns that response and lets the caller's handle503() set
+ * the cooldown as before. The caller does NOT need to know whether a retry
+ * happened.
  *
  * Notes:
  * - Drains the first response body before retrying so the connection releases.
  * - Honours Retry-After if present (capped at 30s to avoid oversleeping).
  * - Reuses the caller's RequestInit including AbortSignal — the original
  *   timeout budget still applies across both attempts combined.
+ * - The inter-attempt sleep is abort-aware (`sleepAbortable`) so a caller
+ *   timeout firing mid-sleep rejects promptly rather than waiting out the
+ *   full up-to-30s window before the second attempt fires anyway.
  */
-async function fetchWithRetry503(
+async function fetchOnceWithServiceUnavailableRetry(
   url: string,
   init: RequestInit,
   providerName: string,
@@ -49,11 +120,70 @@ async function fetchWithRetry503(
   const retryMs = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 30_000) : 5_000;
 
   _log(providerName, `503 service unavailable — retrying once after ${Math.round(retryMs / 1000)}s`);
-  await new Promise(r => setTimeout(r, retryMs));
+  await sleepAbortable(retryMs, init.signal);
 
   // Second attempt. If it also returns 503, the caller's existing handle503
   // path takes over and sets the cooldown.
   return fetch(url, init);
+}
+
+/**
+ * Wraps {@link fetchOnceWithServiceUnavailableRetry} with a bounded retry for
+ * transport-level failures — undici throwing "fetch failed" (or a recognized
+ * socket/DNS/TLS error code) BEFORE any HTTP response was ever received. See
+ * issue #657: undici discards the OS-level cause behind the generic
+ * "fetch failed" message, so this class of failure was previously both
+ * undiagnosable (fixed by {@link formatErrorWithCause}, used in the log line
+ * below and by worker-agent.ts's fatal-error path) and un-retried — a single
+ * transient ECONNRESET/timeout took down the whole dispatch.
+ *
+ * Retries up to TRANSPORT_RETRY_MAX_ATTEMPTS additional times with the
+ * TRANSPORT_RETRY_BACKOFF_MS backoff schedule. Does NOT retry: any HTTP
+ * response the server actually returned (this function never sees those —
+ * they resolve normally, 4xx/5xx included), QuotaExhaustedException (thrown
+ * by the 429/503 handlers *after* a response was received — not a transport
+ * failure), or abort/cancellation (`classifyTransportError` excludes both).
+ *
+ * Idempotency-safety: `classifyTransportError` splits the retryable set by
+ * phase. `'pre-send'` failures (never reached the server) are always retried.
+ * `'ambiguous'` failures (the server may already have received/processed the
+ * request — e.g. a reset/timeout after the connection was established) are
+ * retried ONLY when `opts.hasIdempotencyKey` is true, i.e. the caller attached
+ * an `Idempotency-Key` header the origin can use to dedupe a resend. Without
+ * that, resending an ambiguous failure risks silently re-billing/re-executing
+ * a request the origin already completed — see issue #657 follow-up.
+ *
+ * The single `init` object (and its `signal`) is reused across every attempt,
+ * so the caller's original timeout budget bounds cumulative wall-clock across
+ * ALL attempts combined, not per-attempt — worst case is the original budget
+ * plus the backoff schedule's ~4s.
+ */
+async function fetchWithRetry503(
+  url: string,
+  init: RequestInit,
+  providerName: string,
+  opts: { hasIdempotencyKey?: boolean } = {},
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= TRANSPORT_RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchOnceWithServiceUnavailableRetry(url, init, providerName);
+      if (attempt > 0) {
+        _log(providerName, `transport retry succeeded on attempt ${attempt + 1}/${TRANSPORT_RETRY_MAX_ATTEMPTS + 1}`);
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      const cls = classifyTransportError(err);
+      const retryable = cls === 'pre-send' || (cls === 'ambiguous' && opts.hasIdempotencyKey === true);
+      if (!retryable || attempt === TRANSPORT_RETRY_MAX_ATTEMPTS) throw err;
+      const backoffMs = TRANSPORT_RETRY_BACKOFF_MS[attempt] ?? TRANSPORT_RETRY_BACKOFF_MS[TRANSPORT_RETRY_BACKOFF_MS.length - 1];
+      _log(providerName, `transport failure (attempt ${attempt + 1}/${TRANSPORT_RETRY_MAX_ATTEMPTS + 1}, ${cls}): ${formatErrorWithCause(err)} — retrying in ${backoffMs}ms`);
+      await sleepAbortable(backoffMs, init.signal);
+    }
+  }
+  // Unreachable (loop above always returns or throws) — satisfies control-flow analysis.
+  throw lastErr;
 }
 
 // ─── Provider Placeholder Detection ─────────────────────────────────────────
@@ -301,16 +431,22 @@ export class AnthropicProvider implements ILLMProvider {
     if (anthropicTools.length > 0) body.tools = anthropicTools;
 
     this.quota.checkBeforeRequest();
+    // One idempotency key per logical generate() call — reused across every
+    // transport-retry attempt of THIS request (never regenerated per attempt),
+    // so Anthropic can dedupe a resend that the caller can't prove was never
+    // received (see fetchWithRetry503's 'ambiguous' classification).
+    const idempotencyKey = randomUUID();
     const res = await fetchWithRetry503('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        'Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000),
-    }, 'anthropic');
+    }, 'anthropic', { hasIdempotencyKey: true });
 
     if (!res.ok) {
       const body = (await res.text()).slice(0, 200);
@@ -507,12 +643,21 @@ export class OpenAIProvider implements ILLMProvider {
     this.quota.checkBeforeRequest();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    // Idempotency-Key: documented/honored on the canonical api.openai.com
+    // endpoint. DeepSeek/Grok/OpenClaw reuse this class over a different
+    // base_url and their support for the header is unconfirmed — do not
+    // invent it for them; those requests stay in the pre-#657-fix retry
+    // posture (ambiguous transport failures are not retried without a key).
+    // One key per logical generate() call, reused across every transport-retry
+    // attempt (never regenerated per attempt).
+    const hasIdempotencyKey = this.isCanonicalOpenAI;
+    if (hasIdempotencyKey) headers['Idempotency-Key'] = randomUUID();
     const res = await fetchWithRetry503(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
-    }, 'openai');
+    }, 'openai', { hasIdempotencyKey });
 
     if (!res.ok) {
       // Read the FULL body once: the truncated 200-char slice feeds the thrown
@@ -583,12 +728,18 @@ export class OpenAIProvider implements ILLMProvider {
     this.quota.checkBeforeRequest();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    // Same Idempotency-Key posture as the chat path: only on the canonical
+    // api.openai.com endpoint (this path can also be reached via the chat
+    // path's self-heal fallback for a non-canonical base_url, so re-check
+    // rather than assume).
+    const hasIdempotencyKey = this.isCanonicalOpenAI;
+    if (hasIdempotencyKey) headers['Idempotency-Key'] = randomUUID();
     const res = await fetchWithRetry503(`${this.baseUrl}/responses`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
-    }, 'openai');
+    }, 'openai', { hasIdempotencyKey });
 
     if (!res.ok) {
       const errBody = (await res.text()).slice(0, 200);
@@ -796,6 +947,12 @@ export class GeminiProvider implements ILLMProvider {
     // loops where a single big-context turn (refactor + multi-test plan) can
     // exceed 120s wall-clock. Matches the 600s budget given to openclaw and
     // the 300_000 default for gossip_dispatch write tasks.
+    //
+    // No Idempotency-Key: Gemini's generateContent API does not document
+    // support for one. Rather than invent an unsupported header, this
+    // endpoint stays on the pre-#657-fix retry posture — an 'ambiguous'
+    // transport failure (see classifyTransportError) is NOT retried here,
+    // only a proven 'pre-send' failure is.
     const res = await fetchWithRetry503(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
