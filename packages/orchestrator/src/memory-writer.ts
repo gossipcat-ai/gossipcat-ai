@@ -137,8 +137,25 @@ const LESSON_RESERVED_AGENT_IDS = new Set<string>(['_project', '_system', '_util
  */
 export const LESSON_ID_SEPARATOR = '.';
 
-/** Chars that must never reach the filesystem, mapped to `_` (payload-safe: they are not valid in a component either). */
-const LESSON_PATH_UNSAFE = /[/\\*?"<>|\0]/g;
+/**
+ * Chars that must never reach the filesystem, mapped to `_` (payload-safe: they
+ * are not valid in a `SAFE_NAME` component either).
+ *
+ * `\n`, `\r` and the rest of C0 are in this class for a reason beyond the
+ * filesystem: the slug is embedded RAW into the card's `name:` frontmatter line
+ * (`writeLessonCard`, below) and into the rendered `source=` attribute of an
+ * injected lesson block (lesson-injector.ts). A newline-bearing finding_id
+ * therefore used to (a) terminate the frontmatter early, leaving attacker text
+ * in the card body, and (b) forge a `--- END RECALLED LESSONS ---` terminator
+ * plus a fake ORCHESTRATOR NOTE in the prompt — using no angle brackets, so the
+ * entity-escape on the body never applied. Both downstream sites are also fixed
+ * independently; this closes it at the source.
+ *
+ * No existing card filename contains any of these characters, so no card on
+ * disk changes name or becomes unreadable.
+ */
+// eslint-disable-next-line no-control-regex
+const LESSON_PATH_UNSAFE = /[/\\*?"<>|\0\r\n\x01-\x1f\x7f]/g;
 
 /** Max flattened-id characters kept in a card filename, before the disambiguating digest. */
 const LESSON_SLUG_HEAD_MAX = 96;
@@ -1215,7 +1232,10 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
 
       const content = [
         '---',
-        `name: lesson-${sanitizeYamlValue(card.signal)}-${shortId}`,
+        // shortId is slug-derived and therefore already control-char free
+        // (LESSON_PATH_UNSAFE); sanitizeYamlValue is belt-and-braces on the one
+        // line that embeds it into YAML. No-op for every legitimate slug.
+        `name: lesson-${sanitizeYamlValue(card.signal)}-${sanitizeYamlValue(shortId)}`,
         `description: ${desc}`,
         'type: lesson',
         `agent: ${sanitizeYamlValue(targetAgentId)}`,

@@ -7,7 +7,11 @@ import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
   assemblePrompt,
+  MAX_ASSEMBLED_PROMPT_CHARS,
   loadSkills,
+  selectLessons,
+  renderLessonBlock,
+  logLessonInjection,
   parseClaimBlock,
   verifyClaims,
   emitConsensusSignals,
@@ -15,6 +19,7 @@ import {
   hashPath,
   type ClaimBlock,
   type ClaimVerdict,
+  type SelectedLesson,
   type PerformanceSignal,
   type RoundWarning,
 } from '@gossip/orchestrator';
@@ -254,6 +259,7 @@ export function tryWarmCacheHit(
   liveTaskBlock: string,
   cacheKey: PromptCacheKey,
   promptFormat: PromptFormat | undefined,
+  lessonBlock?: string,
 ): string | null {
   if (promptFormat !== 'elided') return null;
   if (!liveTaskBlock) return null;
@@ -263,10 +269,48 @@ export function tryWarmCacheHit(
   if (!existsSync(cached.skillsSectionPath)) return null;
   try {
     const skillsSection = require('fs').readFileSync(cached.skillsSectionPath, 'utf8');
-    return skillsSection + liveTaskBlock;
+    return composeWarmBody(skillsSection, liveTaskBlock, lessonBlock);
   } catch {
     return null;
   }
+}
+
+/**
+ * Separator `assemblePrompt` emits immediately before the TASK segment
+ * (`\n\n---\n\nTask: `). `splitAssembledPrompt` cuts at `\n\nTask:`, so the
+ * cached skills-section always ends with this string.
+ */
+const ASSEMBLER_TASK_SEPARATOR = '\n\n---';
+
+/**
+ * Compose a warm-hit body, inserting the RECALLED LESSONS block (issue #669) at
+ * the SAME position `assemblePrompt` would place `retrievedLessons` on a cold
+ * miss — i.e. as the last suffix segment before the `\n\n---\n\nTask:`
+ * separator. `tests/cli/dispatch-lesson-injection.test.ts` asserts warm and cold
+ * bodies are byte-identical for the same inputs.
+ *
+ * This replaces a post-hoc `lastIndexOf('\n\n---\n\nTask: ')` splice on the
+ * finished prompt. That anchor is CONTENT, not structure: a brief that quotes a
+ * prior prompt carries the same bytes, and the block landed inside the quoted
+ * material. Here the boundary is a string this function itself constructed.
+ *
+ * The cap re-check exists because the cached skills-section was sized by
+ * `assemblePrompt` against a DIFFERENT task, so its priority-drop pass cannot
+ * account for this dispatch. The lesson block is the lowest-priority optional
+ * content in the body, so it is what gets dropped.
+ */
+export function composeWarmBody(
+  skillsSection: string,
+  liveTaskBlock: string,
+  lessonBlock?: string,
+): string {
+  const base = skillsSection + liveTaskBlock;
+  if (!lessonBlock) return base;
+  const withLessons = skillsSection.endsWith(ASSEMBLER_TASK_SEPARATOR)
+    ? skillsSection.slice(0, -ASSEMBLER_TASK_SEPARATOR.length)
+      + `\n\n${lessonBlock}${ASSEMBLER_TASK_SEPARATOR}${liveTaskBlock}`
+    : `${skillsSection}\n\n${lessonBlock}${liveTaskBlock}`;
+  return withLessons.length > MAX_ASSEMBLED_PROMPT_CHARS ? base : withLessons;
 }
 
 /**
@@ -324,6 +368,55 @@ function maybeApplyUnverifiedNote(
     `[gossipcat] ⚠️ unverified-claim detected for ${agentId}: matched "${annotation.matchedText}" (pattern #${annotation.matchedPattern})\n`,
   );
   return prependUnverifiedNote(agentPrompt, annotation.reason || annotation.matchedText || '');
+}
+
+/**
+ * Build the RECALLED LESSONS block for a native dispatch (issue #669), or '' if
+ * nothing clears the relevance floor.
+ *
+ * The block is then handed to `assemblePrompt({ retrievedLessons })` on a cold
+ * miss and to `composeWarmBody` on a warm hit — it is NEVER spliced into a
+ * finished prompt. Two defects dissolve at once:
+ *
+ *   - the old splice searched for `lastIndexOf('\n\n---\n\nTask: ')`, which is
+ *     content rather than structure, so a brief QUOTING a prior prompt got the
+ *     block inserted inside the quoted material;
+ *   - the old splice ran AFTER `assemblePrompt` had enforced
+ *     `MAX_ASSEMBLED_PROMPT_CHARS` with priority dropping, so the native paths
+ *     bypassed the 30K cap entirely while the relay path (which has always used
+ *     `retrievedLessons`, priority 3) was protected. That asymmetry was the tell.
+ *
+ * Still NOT stored in the warm cache: the block is task-dependent and the cache
+ * is keyed by (agentId, skillFingerprint, taskKind), so a cached body carrying
+ * it would leak task 1's lessons into task 2. The cold path caches the
+ * lesson-free assembly and re-assembles with lessons for the live prompt.
+ *
+ * Best-effort: recall must never fail a dispatch.
+ */
+function buildLessonBlock(
+  args: { agentId: string; task: string; taskId: string; consensus?: boolean },
+): string {
+  let lessons: SelectedLesson[];
+  try {
+    lessons = selectLessons(process.cwd(), args.agentId, args.task);
+  } catch {
+    return '';
+  }
+  if (lessons.length === 0) return '';
+
+  const block = renderLessonBlock(lessons, { consensus: !!args.consensus });
+  if (!block) return '';
+
+  logLessonInjection(process.cwd(), {
+    taskId: args.taskId,
+    agentId: args.agentId,
+    consensus: !!args.consensus,
+    lessons,
+  });
+  process.stderr.write(
+    `[gossipcat] 📚 injected ${lessons.length} lesson card(s) for ${args.agentId} [${args.taskId}]: ${lessons.map(l => l.source).join(', ')}\n`,
+  );
+  return block;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -844,27 +937,36 @@ export async function handleDispatchSingle(
     // per dispatch (caught by dispatch-prompt-cache.test.ts splice integrity).
     const singleLiveTaskTail = `\n\nTask: ${task}`;
 
+    // Lesson auto-injection (issue #669) — built BEFORE assembly so it can be
+    // routed through `retrievedLessons` (cold) / `composeWarmBody` (warm)
+    // instead of being spliced into the finished prompt. See buildLessonBlock.
+    const singleLessonBlock = buildLessonBlock({ agentId: agent_id, task, taskId });
+
     let agentPrompt: string;
     let singleWarm = false;
-    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format);
+    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format, singleLessonBlock);
     if (singleWarmBody) {
       agentPrompt = singleWarmBody;
       singleWarm = true;
     } else {
       // Cold path — full assemblePrompt as Phase 1.
-      agentPrompt = assemblePrompt({
+      const singleParts = {
         identity: buildNativeIdentity(agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResult.content || undefined,
         chainContext: chainContext || undefined,
         task,
-      });
-      // Store the pre-annotation assembled body in the cache. Annotations
-      // (scope/unverified) are head-prepended and task-dependent, so caching
-      // them risks leaking T1's notes to T2 on warm hit. Cache the assembler
-      // output; re-apply annotations per dispatch.
+      };
+      agentPrompt = assemblePrompt(singleParts);
+      // Store the pre-annotation, LESSON-FREE assembled body in the cache.
+      // Annotations (scope/unverified) are head-prepended and task-dependent,
+      // and lessons are task-matched, so caching either risks leaking T1's
+      // content into T2 on a warm hit. Cache the plain assembler output.
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey);
+      }
+      if (singleLessonBlock) {
+        agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock });
       }
     }
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
@@ -1294,9 +1396,14 @@ export async function handleDispatchParallel(
     };
     const parallelLiveTaskTail = `\n\nTask: ${def.task}`;  // see singleLiveTaskTail above for splice rationale
 
+    // Lesson auto-injection (issue #669) — per-def, built before assembly.
+    const parallelLessonBlock = buildLessonBlock({
+      agentId: def.agent_id, task: def.task, taskId, consensus,
+    });
+
     let agentPrompt: string;
     let parallelWarm = false;
-    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format);
+    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format, parallelLessonBlock);
     if (parallelWarmBody) {
       agentPrompt = parallelWarmBody;
       parallelWarm = true;
@@ -1306,15 +1413,19 @@ export async function handleDispatchParallel(
       // flags this batch as consensus (via the outer `consensus` param), use
       // the full CONSENSUS_OUTPUT_FORMAT instead of the slim schema — peer
       // cross-review expects the same framing relay agents see.
-      agentPrompt = assemblePrompt({
+      const parallelParts = {
         identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResult.content || undefined,
         consensusSummary: consensus || undefined,
         task: def.task,
-      });
+      };
+      agentPrompt = assemblePrompt(parallelParts);
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey);
+      }
+      if (parallelLessonBlock) {
+        agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock });
       }
     }
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
@@ -1660,9 +1771,16 @@ export async function handleDispatchConsensus(
     };
     const consensusLiveTaskTail = `\n\nTask: ${def.task}`;  // see singleLiveTaskTail above for splice rationale
 
+    // Lesson auto-injection (issue #669) — per-def, built before assembly.
+    // `consensus: true` adds the anti-anchoring FORBIDDEN clause (issue #659):
+    // a recalled lesson is never evidence and must never manufacture an AGREE.
+    const consensusLessonBlock = buildLessonBlock({
+      agentId: def.agent_id, task: def.task, taskId, consensus: true,
+    });
+
     let agentPrompt: string;
     let consensusWarm = false;
-    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format);
+    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format, consensusLessonBlock);
     if (consensusWarmBody) {
       agentPrompt = consensusWarmBody;
       consensusWarm = true;
@@ -1672,16 +1790,20 @@ export async function handleDispatchConsensus(
       // consensus degradation). assemblePrompt() keeps them in the preserved
       // suffix automatically; the truncatable prefix is [identity + instructions
       // + skills]. See consensus 12827629-fa9a4660:f8 for the original regression.
-      agentPrompt = assemblePrompt({
+      const consensusParts = {
         identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResultC.content || undefined,
         consensusSummary: true,
         lens: lensContent || undefined,
         task: def.task,
-      });
+      };
+      agentPrompt = assemblePrompt(consensusParts);
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey);
+      }
+      if (consensusLessonBlock) {
+        agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock });
       }
     }
     // Premise verification (Component B) — per-def in the consensus native loop.
