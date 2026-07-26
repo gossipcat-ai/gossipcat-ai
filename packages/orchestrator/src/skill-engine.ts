@@ -135,7 +135,10 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   // skills (see the prompt below), and those keywords are matched by
   // skill-loader's getPattern() as /\b<keyword>\b/i — so the old `fabricat` /
   // `hallucin` stems were baked dead into every generated skill too.
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucination', 'verify', 'does not exist', 'no such'],
+  // Issue #679 adds the present participles (`fabricating` / `hallucinating`) —
+  // the most natural phrasing in a brief, and unreachable from any other
+  // inflection under \b-anchored matching.
+  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verify', 'does not exist', 'no such'],
 };
 
 const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Key Patterns', '## Anti-Patterns', '## Quality Gate'];
