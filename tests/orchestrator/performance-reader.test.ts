@@ -442,6 +442,12 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
   // determine the tail. The reader was always correct in intent — these tests
   // pin its behavior so a future regression to "single batch timestamp"
   // recording immediately fails.
+  //
+  // Every `disagreement` below carries `category` on purpose: a category-less
+  // disagreement is OPERATIONAL (a failed dispatch, see the "disagreement no-op
+  // guard (PR 4 Part B)" suite above) and is excluded from both the accuracy
+  // arithmetic and the circuit-breaker streak. These fixtures model real
+  // finding-evaluation verdicts, so they must be categorized to be negatives.
 
   function ts(daysAgo: number, ms = 0): string {
     return new Date(Date.now() - daysAgo * 86400000 + ms).toISOString();
@@ -455,7 +461,7 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
       { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 't3', evidence: 'x', timestamp: ts(3) },
       // 3 negatives more recent (unique_unconfirmed removed from NEGATIVE_SIGNALS — use hallucination instead)
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'bad', timestamp: ts(2) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 't5', evidence: 'bad', timestamp: ts(1) },
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't6', evidence: 'bad', timestamp: ts(0) },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
@@ -466,7 +472,7 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
     writeSignals([
       // 3 negatives in the past
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 't1', evidence: 'bad', timestamp: ts(5) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 't2', evidence: 'bad', timestamp: ts(4) },
       { type: 'consensus', signal: 'unique_unconfirmed', agentId: 'rev', taskId: 't3', evidence: 'bad', timestamp: ts(3) },
       // Newest is positive — must break the streak
       { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 't4', evidence: 'x', timestamp: ts(0) },
@@ -486,8 +492,8 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
       { type: 'consensus', signal: 'unique_confirmed', agentId: 'rev', taskId: 'newer', evidence: 'x', timestamp: ts(1) },
       { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(2) },
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'old', evidence: 'bad', timestamp: ts(3) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest1', evidence: 'bad', timestamp: ts(4) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest2', evidence: 'bad', timestamp: ts(5) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 'oldest1', evidence: 'bad', timestamp: ts(4) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 'oldest2', evidence: 'bad', timestamp: ts(5) },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     // True chronology: 3 negatives (oldest) → 3 positives (newest). Tail is positive.
@@ -498,10 +504,10 @@ describe('PerformanceReader — circuit breaker chronology (signal-timestamp-fro
     // The exact incident: even though file order looks "good then bad",
     // the bad signals are CHRONOLOGICALLY NEWER and must trip the breaker.
     writeSignals([
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'oldest', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 'oldest', evidence: 'bad', timestamp: ts(2) },
       { type: 'consensus', signal: 'agreement', agentId: 'rev', counterpartId: 'p', taskId: 'mid', evidence: 'x', timestamp: ts(5) },
       { type: 'consensus', signal: 'hallucination_caught', agentId: 'rev', counterpartId: 'p', taskId: 'newer', evidence: 'bad', timestamp: ts(1) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', taskId: 'newest', evidence: 'bad', timestamp: ts(0) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'rev', counterpartId: 'p', category: 'testing', taskId: 'newest', evidence: 'bad', timestamp: ts(0) },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     expect(reader.isCircuitOpen('rev')).toBe(true);
@@ -570,10 +576,12 @@ describe('PerformanceReader — circuit breaker: unique_unconfirmed removed from
   it('3 consecutive disagreement (loser) still bench: circuitOpen === true', () => {
     // disagreement remains in NEGATIVE_SIGNALS — agentId is the loser.
     // Only the loser gets a disagreement signal record; winner gets no streak tick.
+    // `category` is required for these to read as real verdicts rather than
+    // operational dispatch failures.
     writeSignals([
-      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
-      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', category: 'testing', taskId: 't1', evidence: 'bad', timestamp: ts(2) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', category: 'testing', taskId: 't2', evidence: 'bad', timestamp: ts(1) },
+      { type: 'consensus', signal: 'disagreement', agentId: 'agent-c', counterpartId: 'winner', category: 'testing', taskId: 't3', evidence: 'bad', timestamp: ts(0) },
     ]);
     const reader = new PerformanceReader(TEST_DIR);
     const score = reader.getAgentScore('agent-c')!;
