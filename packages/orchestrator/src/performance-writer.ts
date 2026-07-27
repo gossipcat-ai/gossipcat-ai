@@ -277,7 +277,7 @@ function resolveBoundAtMs(
   cache: Map<string, number>,
   fallbackMs: number,
 ): number {
-  const key = agentId + ' ' + category;
+  const key = agentId + '\u0000' + category;
   const cached = cache.get(key);
   if (cached !== undefined) {
     return cached === boundAtMissSentinel ? fallbackMs : cached;
