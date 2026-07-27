@@ -116,16 +116,29 @@ const KNOWN_CATEGORIES = new Set([
   'severity_calibration', 'citation_grounding',
 ]);
 
-/** Default keywords per category for contextual skill activation */
-const CATEGORY_KEYWORDS: Record<string, string[]> = {
+/**
+ * Default keywords per category for contextual skill activation.
+ *
+ * Mirror of `DEFAULT_KEYWORDS` in skill-loader.ts for every category the two
+ * tables share — `tests/orchestrator/keyword-stem-matching.test.ts` asserts they
+ * agree, so edit both or neither. This table additionally seeds the `keywords:`
+ * frontmatter of generated skills (see the prompt below); skill-loader's table
+ * does not.
+ *
+ * Trailing `*` = opt-in stem match (issue #681). The full convention, and the
+ * per-stem over-match audit behind each `*` below, is documented on
+ * `DEFAULT_KEYWORDS` in skill-loader.ts. Do not add one here without doing that
+ * audit — `getPattern()` compiles these for every skill of every agent.
+ */
+export const CATEGORY_KEYWORDS: Record<string, string[]> = {
   trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
-  injection_vectors: ['injection', 'xss', 'sql', 'sanitize', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
-  input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitize', 'input', 'form', 'request', 'coerce', 'transform'],
+  injection_vectors: ['injection', 'xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
+  input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitiz*', 'input', 'form', 'request', 'coerce', 'transform'],
   concurrency: ['race condition', 'concurrent', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore'],
   resource_exhaustion: ['memory', 'leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
   type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
-  error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
-  data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
+  error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry*', 'retries', 'retried', 'fallback', 'recovery', 'graceful'],
+  data_integrity: ['data integrity', 'migration', 'serializ*', 'deserializ*', 'corrupt*', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
   severity_calibration: ['severity', 'critical', 'high', 'medium', 'low', 'impact', 'risk', 'priority', 'triage', 'cvss'],
   // Citation grounding — fabrication-class failures: cited file/line/symbol does not match repo state.
   // Gate for this is a skill bind + signal category, not the consensus-engine verifyCitations AND-gate
@@ -138,7 +151,10 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   // Issue #679 adds the present participles (`fabricating` / `hallucinating`) —
   // the most natural phrasing in a brief, and unreachable from any other
   // inflection under \b-anchored matching.
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verify', 'does not exist', 'no such'],
+  // Issue #681 adds the stem markers. Because this table seeds generated skill
+  // frontmatter, every skill generated from here inherits the wildcards — which
+  // is how the fix reaches new agent-local skills without a backfill pass.
+  citation_grounding: ['cite*', 'citing', 'citation*', 'line number*', 'anchor*', 'file path*', 'referenc*', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verif*', 'does not exist', "doesn't exist", 'no such'],
 };
 
 const REQUIRED_SECTIONS = ['## Iron Law', '## When This Skill Activates', '## Methodology', '## Key Patterns', '## Anti-Patterns', '## Quality Gate'];

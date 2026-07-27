@@ -24,7 +24,7 @@
  * The fixtures here are adversarial by construction — see the comment on
  * ESCAPE_FIXTURE.
  */
-import { loadSkills, DEFAULT_KEYWORDS } from '../../packages/orchestrator/src/skill-loader';
+import { loadSkills, DEFAULT_KEYWORDS, __lruInternals } from '../../packages/orchestrator/src/skill-loader';
 import {
   assemblePrompt,
   wrapSkillsBlock,
@@ -39,12 +39,19 @@ const countOpen = (s: string) => (s.match(/---\s*SKILLS\s*---/g) || []).length;
 const countClose = (s: string) => (s.match(/---\s*END SKILLS\s*---/g) || []).length;
 
 /**
- * Mirror of `getPattern()` in skill-loader — keywords are escaped, then
- * anchored with \b on both sides. Reproduced here (rather than exported) so
- * the test fails loudly if the compiler's contract changes.
+ * Mirror of `getPattern()` in skill-loader. Reproduced here (rather than
+ * exported) so the test fails loudly if the compiler's contract changes.
+ *
+ * Issue #681 added the trailing-`*` stem convention: a keyword ending in `*`
+ * drops the trailing anchor and matches inflections. Bare keywords are escaped
+ * and anchored with \b on both sides, exactly as before.
  */
-const keywordPattern = (keyword: string) =>
-  new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+const keywordPattern = (keyword: string) => {
+  const stem = keyword.replace(/\*+$/, '');
+  const isWildcard = stem.length > 0 && stem !== keyword;
+  const escaped = (isWildcard ? stem : keyword).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(isWildcard ? `\\b${escaped}[a-z]*` : `\\b${escaped}\\b`, 'i');
+};
 
 const categoryFires = (category: string, text: string) =>
   DEFAULT_KEYWORDS[category].some(k => keywordPattern(k).test(text));
@@ -304,6 +311,16 @@ describe('#676/#679 — citation_grounding keywords match real inflections', () 
     expect(categoryFires('citation_grounding', text)).toBe(true);
   });
 
+  it('the local mirror still matches the real compiler', () => {
+    // The mirror above only guards the contract if it cannot silently drift from
+    // getPattern(). Under mutation testing, a change to the real compiler left
+    // every assertion in this file green because they all ran on the mirror.
+    for (const k of [...DEFAULT_KEYWORDS.citation_grounding, 'auth', 'a*b', '*', 'n+1']) {
+      expect(`${k} → ${keywordPattern(k).source}`)
+        .toBe(`${k} → ${__lruInternals.getPattern(k).source}`);
+    }
+  });
+
   it('has no permanently-dead stem entries left', () => {
     expect(DEFAULT_KEYWORDS.citation_grounding).not.toContain('fabricat');
     expect(DEFAULT_KEYWORDS.citation_grounding).not.toContain('hallucin');
@@ -314,21 +331,38 @@ describe('#676/#679 — citation_grounding keywords match real inflections', () 
     }
   });
 
-  it('REGRESSION: exact-match keywords keep their current behaviour', () => {
-    // `cite` is word-anchored and must NOT start matching plurals/derivatives.
+  /**
+   * CONTRACT CHANGE — issue #681, option 2, operator-approved.
+   *
+   * These assertions were added in #679 to prove that fix did not widen
+   * matching. #681 deliberately widens it, but ONLY for keywords that opt in
+   * with a trailing `*`. So the guard is not deleted — it is re-pointed at the
+   * property that still has to hold: a BARE keyword is still exactly anchored,
+   * and nothing stems by accident. The widening is asserted separately in
+   * tests/orchestrator/keyword-stem-matching.test.ts.
+   */
+  it('REGRESSION: BARE keywords keep their exact-match behaviour', () => {
+    // Bare `cite`/`anchor`/`verify` — the pre-#681 entries — must still refuse
+    // to match plurals and derivatives when written without the marker.
     expect(keywordPattern('cite').test('cite the line')).toBe(true);
     expect(keywordPattern('cite').test('citations')).toBe(false);
     expect(keywordPattern('anchor').test('anchor block')).toBe(true);
     expect(keywordPattern('anchor').test('anchors')).toBe(false);
     expect(keywordPattern('verify').test('verify the claim')).toBe(true);
     expect(keywordPattern('verify').test('verified')).toBe(false);
+    // The keyword the whole anchor exists for (#676): never `author`.
+    expect(keywordPattern('auth').test('the author of the file')).toBe(false);
+    expect(keywordPattern('auth').test('auth token')).toBe(true);
     // Multi-word keywords still work.
     expect(keywordPattern('does not exist').test('the file does not exist')).toBe(true);
   });
 
-  it('the 9 pre-existing keywords are all still present', () => {
+  it('the 9 pre-existing keywords are still reachable (as stems where widened)', () => {
+    // #681 replaced 7 of these base forms with stem-marked equivalents. The
+    // contract that survives is REACHABILITY, not literal list membership: each
+    // original base form must still be matched by some keyword in the category.
     for (const k of ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'verify', 'does not exist', 'no such']) {
-      expect(DEFAULT_KEYWORDS.citation_grounding).toContain(k);
+      expect(categoryFires('citation_grounding', k)).toBe(true);
     }
   });
 });

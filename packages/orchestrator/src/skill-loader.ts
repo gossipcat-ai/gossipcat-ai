@@ -28,16 +28,49 @@ const CATEGORY_BOOST = 0.5;
 // to stronger ones and only fill the remaining slots when nothing else wins.
 const MIN_KEYWORD_HITS = 1;
 
-/** Default keyword sets by category — used when skill frontmatter has no explicit keywords */
+/**
+ * Default keyword sets by category — used when skill frontmatter has no explicit keywords.
+ *
+ * KEYWORD CONVENTION (issue #681, option 2, operator-approved). A trailing `*`
+ * opts that single keyword into stem matching: `verif*` compiles to the
+ * case-insensitive `\bverif[a-z]` star, reaching verifies / verified /
+ * verifying / verification.
+ * A bare keyword keeps exact `\b…\b` word matching, byte-identical to pre-#681.
+ * See `getPattern()` for the compiler and why the anchor is NOT relaxed globally.
+ *
+ * Adding a `*` is a deliberate act: audit the stem for off-domain over-match
+ * first. Stems rejected here for that reason, with the colliding words:
+ *   `cit*`   → city, citizen            (use `cite*` + `citing` + `citation*`)
+ *   `retr*`  → retreat, retrieve        (use `retry*` + explicit retries/retried)
+ *   `retrie*`→ retrieve, retrieval      (same)
+ *   `cast*`  → castle, caster, castigate (left bare below)
+ *   `auth*`  → author, authored          (left bare; the #676 case)
+ *   `log*`   → login, logic, logistics   (left bare)
+ *   `exec*`  → execution is in-domain, but `executive`/`executor` are not (left bare)
+ */
 export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
-  injection_vectors: ['injection', 'xss', 'sql', 'sanitize', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
-  input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitize', 'input', 'form', 'request', 'coerce', 'transform'],
+  // `sanitiz*` → sanitize/sanitized/sanitizes/sanitizing/sanitization/sanitizer.
+  // No English word outside that family begins `sanitiz`. (The British `sanitis*`
+  // spelling is still uncovered — same gap as the pre-#681 bare `sanitize`.)
+  // `exec` stays bare: `exec*` would reach executive/executor, which are not
+  // injection vocabulary.
+  injection_vectors: ['injection', 'xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
+  input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitiz*', 'input', 'form', 'request', 'coerce', 'transform'],
   concurrency: ['race condition', 'concurrent', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore'],
   resource_exhaustion: ['memory', 'leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
+  // `cast` deliberately stays bare — `cast*` reaches castle/caster/castigate, and
+  // the trailing \b is what keeps it out of `broadcast` (#676). `casting` is
+  // therefore still unreachable; that is the accepted trade.
   type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
-  error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry', 'fallback', 'recovery', 'graceful'],
-  data_integrity: ['data integrity', 'migration', 'serialize', 'deserialize', 'corrupt', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
+  // `retry*` → retry/retrying. retries/retried need a different stem (`retri*`
+  // collides with retrieve/retrieval, `retr*` also with retreat), so they are
+  // enumerated instead.
+  error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry*', 'retries', 'retried', 'fallback', 'recovery', 'graceful'],
+  // `serializ*` / `deserializ*` → the -s/-d/-ing/-ation/-er forms. Both are needed:
+  // the leading \b means `serializ*` does NOT match inside `deserialization`.
+  // `corrupt*` → corrupts/corrupted/corruption/corruptible; no off-domain collisions.
+  data_integrity: ['data integrity', 'migration', 'serializ*', 'deserializ*', 'corrupt*', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
   // Fabrication-class failures: agent cites code that does not match repo state.
   // Kept in sync with CATEGORY_KEYWORDS in skill-engine.ts — both tables drive contextual activation
   // and auto-inference in gossip_signals, so they must agree.
@@ -52,7 +85,26 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // participle is the most natural phrasing in a task brief ("the agent is
   // fabricating citations"), and \b-anchored matching means no other inflection
   // covers it.
-  citation_grounding: ['cite', 'citation', 'line number', 'anchor', 'file path', 'reference', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verify', 'does not exist', 'no such'],
+  // Issue #681: 12 of 16 realistic phrasings fired NO keyword here, because
+  // every entry was a base form under \b…\b. The base forms below now carry the
+  // stem marker. Per-stem over-match audit:
+  //   `cite*`      cite/cites/cited. Not city/citizen (no `y`/`i` after `cite`),
+  //                not excite (leading \b). `citing` needs its own entry — the
+  //                `e` drops, so it is not reachable from the `cite` stem, and
+  //                `cit*` was rejected above.
+  //   `citation*`  citation/citations.
+  //   `line number*` / `file path*`  plural only; wildcarding mid-phrase is
+  //                awkward, and the trailing noun is the one that inflects.
+  //   `anchor*`    anchor/anchors/anchored/anchoring.
+  //   `referenc*`  reference(s|d)/referencing. Deliberately NOT `refer*`, which
+  //                reaches referral/referee/deference-adjacent prose.
+  //   `verif*`     verify/verifies/verified/verifying/verification/verifiable.
+  //                No word outside the verify family begins `verif`.
+  // The fabricate/hallucinate enumerations from #676/#679 are left as-is: they
+  // already cover their full inflection set, so restating them as `fabricat*` /
+  // `hallucinat*` would churn a working, test-pinned list for zero coverage gain.
+  // `doesn't exist` is a contraction, not an inflection — no stem reaches it.
+  citation_grounding: ['cite*', 'citing', 'citation*', 'line number*', 'anchor*', 'file path*', 'referenc*', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verif*', 'does not exist', "doesn't exist", 'no such'],
   // Phase 1 dev-quality extensions (consensus 09693c51-184246e5).
   observability: ['log', 'logging', 'metric', 'tracing', 'telemetry', 'monitor', 'dashboard', 'stderr', 'observability'],
   cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'prompt', 'banner', 'spinner'],
@@ -442,6 +494,48 @@ const patternCache = new Map<string, RegExp>();
 const MAX_PATTERN_CACHE = 500;
 const MAX_KEYWORD_LENGTH = 100;
 
+/**
+ * Strip the opt-in trailing `*` stem marker from a keyword, yielding the text a
+ * literal-substring consumer should match on.
+ *
+ * `getPattern()` is not the only consumer of the keyword tables: the signal
+ * category-inference paths in `mcp-server-sdk.ts` match with `text.includes(kw)`.
+ * A raw `cite*` is never a substring of real prose, so those consumers must strip
+ * the marker or the keyword goes dead for them — the exact failure mode #676
+ * fixed for `fabricat`/`hallucin`.
+ *
+ * A keyword of nothing but asterisks has no stem; returning the original (rather
+ * than `''`) keeps `includes()` from matching every string.
+ */
+export function keywordStem(keyword: string): string {
+  const stem = keyword.replace(/\*+$/, '');
+  return stem.length > 0 ? stem : keyword;
+}
+
+/**
+ * Compile one keyword into its matcher.
+ *
+ * **Bare keyword** — `/\b<escaped>\b/i`, exact word match. Unchanged, byte for
+ * byte, from the pre-#681 compiler.
+ *
+ * **Trailing `*` (issue #681, option 2, operator-approved)** — opts that ONE
+ * keyword into stem matching: case-insensitive `\b<escaped-stem>[a-z]` star.
+ * The leading `\b` is kept; only the trailing `\b` is dropped, so `verif*`
+ * reaches verifies / verified / verifying / verification while `\bverif` still
+ * cannot start mid-word.
+ *
+ * Opt-in is the whole point. Relaxing the trailing `\b` for EVERY keyword was
+ * considered and rejected in #676: `auth` would match `author`, `log` `login`,
+ * `cast` `broadcast`, `exec` `execution`. Those keywords stay bare and keep
+ * their anchor; only keywords whose author has audited the stem for over-match
+ * carry the marker.
+ *
+ * Only a TRAILING `*` is a wildcard. Anywhere else it stays a literal asterisk
+ * via the escape step, so `a*b` still means the three characters `a*b`. A
+ * keyword that is nothing but asterisks has no stem and falls back to the
+ * exact-match compile — `\b[a-z]*` would match every task string, so this fails
+ * closed rather than open.
+ */
 function getPattern(keyword: string): RegExp {
   const capped = keyword.slice(0, MAX_KEYWORD_LENGTH);
   const cached = patternCache.get(capped);
@@ -458,8 +552,10 @@ function getPattern(keyword: string): RegExp {
     const first = patternCache.keys().next().value;
     if (first !== undefined) patternCache.delete(first);
   }
-  const escaped = capped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`\\b${escaped}\\b`, 'i');
+  const stem = keywordStem(capped);
+  const isWildcard = stem !== capped;
+  const escaped = (isWildcard ? stem : capped).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(isWildcard ? `\\b${escaped}[a-z]*` : `\\b${escaped}\\b`, 'i');
   patternCache.set(capped, pattern);
   return pattern;
 }

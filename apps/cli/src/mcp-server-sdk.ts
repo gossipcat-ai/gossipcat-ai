@@ -3638,13 +3638,16 @@ export function createMcpServer(): McpServer {
             }
           } catch { /* file may not exist yet */ }
 
-          const { emitConsensusSignals: emitBulkConsensusSignals, PerformanceReader, DEFAULT_KEYWORDS: BULK_DK } = await import('@gossip/orchestrator');
+          const { emitConsensusSignals: emitBulkConsensusSignals, PerformanceReader, DEFAULT_KEYWORDS: BULK_DK, keywordStem: bulkKeywordStem } = await import('@gossip/orchestrator');
           const bulkInferCategory = (text: string): string | undefined => {
             if (!text.trim()) return undefined;
             let bestCategory = '';
             let bestHits = 0;
             for (const [category, keywords] of Object.entries(BULK_DK)) {
-              const hits = (keywords as string[]).filter(kw => text.includes(kw)).length;
+              // keywordStem strips the trailing `*` stem marker (#681). This is a
+              // literal-substring matcher, not getPattern's regex — a raw `cite*`
+              // occurs in no real prose and would silently go dead here.
+              const hits = (keywords as string[]).filter(kw => text.includes(bulkKeywordStem(kw))).length;
               if (hits > bestHits) { bestHits = hits; bestCategory = category; }
             }
             return bestHits >= 1 ? bestCategory : undefined;
@@ -3791,14 +3794,16 @@ export function createMcpServer(): McpServer {
         // bound skill stays pending forever because post-bind counters only match exact
         // category strings. Uses the same DEFAULT_KEYWORDS table the skill-gap tracker
         // uses below, so category assignment is consistent across both pipelines.
-        const { DEFAULT_KEYWORDS: DK } = await import('@gossip/orchestrator');
+        const { DEFAULT_KEYWORDS: DK, keywordStem: inferKeywordStem } = await import('@gossip/orchestrator');
         const inferCategory = (s: { finding?: string; evidence?: string; agent_id?: string }): string | undefined => {
           const text = `${s.finding || ''} ${s.evidence || ''}`.toLowerCase();
           if (!text.trim()) return undefined;
           let bestCategory = '';
           let bestHits = 0;
           for (const [category, keywords] of Object.entries(DK)) {
-            const hits = keywords.filter(kw => text.includes(kw)).length;
+            // Stem marker stripped before substring matching — see #681 and the
+            // identical guard in the bulk_from_consensus path above.
+            const hits = keywords.filter(kw => text.includes(inferKeywordStem(kw))).length;
             if (hits > bestHits) { bestHits = hits; bestCategory = category; }
           }
           return bestHits >= 1 ? bestCategory : undefined;
