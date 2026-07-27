@@ -473,7 +473,7 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
     // #522: carry base_url through so DeepSeek / OpenAI-compatible agents reach
     // their configured endpoint instead of defaulting to api.openai.com.
     base_url: agent.base_url,
-    // #522: carry the keychain service name through so the resolver reads the
+    // #522: carry the key name through so the resolver reads the
     // per-agent key (key_ref ?? provider) at both resolution sites.
     key_ref: agent.key_ref,
     maxToolTurns: agent.maxToolTurns,

@@ -80,7 +80,7 @@ export interface MainAgentConfig {
   relayUrl: string;
   relayApiKey?: string;  // shared secret for relay auth — passed to all workers
   agents: AgentConfig[];
-  apiKeys?: Record<string, string>;  // keychain service name (key_ref ?? provider) → key
+  apiKeys?: Record<string, string>;  // key name (key_ref ?? provider) → key
   projectRoot?: string;  // defaults to process.cwd()
   llm?: ILLMProvider;  // override for testing
   bootstrapPrompt?: string;  // NEW — injected by BootstrapGenerator
@@ -197,10 +197,10 @@ export class MainAgent {
       // base_url and the DegradedProvider pre-flight — mirroring syncWorkers.
       // Previously it used raw createProvider(config.provider, ...), which
       // dropped base_url and bypassed the pre-flight (a latent #523 gap here).
-      const keyService = config.key_ref ?? config.provider;
-      let apiKey: string | undefined = this.apiKeys[keyService];
+      const keyName = config.key_ref ?? config.provider;
+      let apiKey: string | undefined = this.apiKeys[keyName];
       if (!apiKey && this.keyProviderFn) {
-        apiKey = (await this.keyProviderFn(keyService)) ?? undefined;
+        apiKey = (await this.keyProviderFn(keyName)) ?? undefined;
       }
       const llm = createProviderForAgent(
         config.id, config.provider, config.model, apiKey, config.base_url, undefined, config.key_ref,

@@ -77,7 +77,7 @@ export async function selectUtilityFallbackProvider(
   // (a) main
   consider(main.provider, main.model, main.key);
 
-  // (b) each non-native agent — key via the per-agent keychain service (key_ref ?? provider).
+  // (b) each non-native agent — key via the per-agent key name (key_ref ?? provider).
   // Carry the agent's base_url so a custom-endpoint openai-compatible agent yields a
   // correct fallback (pointing at ITS endpoint, not api.openai.com) rather than a
   // broken entry that first-seen-wins would then shadow the curated default with.

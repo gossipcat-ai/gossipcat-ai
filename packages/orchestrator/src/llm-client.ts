@@ -1194,10 +1194,10 @@ export function createProviderForAgent(
  */
 export async function resolveAgentProvider(
   ac: { id: string; provider: string; model: string; base_url?: string; key_ref?: string },
-  getKey: (service: string) => Promise<string | null>,
+  getKey: (keyName: string) => Promise<string | null>,
 ): Promise<ILLMProvider> {
-  const keyService = ac.key_ref ?? ac.provider;
-  const key = await getKey(keyService);
+  const keyName = ac.key_ref ?? ac.provider;
+  const key = await getKey(keyName);
   return createProviderForAgent(ac.id, ac.provider, ac.model, key ?? undefined, ac.base_url, undefined, ac.key_ref);
 }
 

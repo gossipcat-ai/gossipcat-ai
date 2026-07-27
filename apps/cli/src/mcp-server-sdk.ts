@@ -905,16 +905,16 @@ async function doBoot() {
     mainKey = await ctx.keychain.getKey(config.main_agent.provider);
     if (!mainKey) {
       for (const ac of agentConfigs) {
-        // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
+        // #522: resolve from the per-agent key name (key_ref ?? provider)
         // so an agent whose key is stored under a custom key_ref is visible to
         // the orchestrator-LLM fallback, not just provider-named ones.
-        const keyService = (ac as any).key_ref ?? ac.provider;
-        const key = await ctx.keychain.getKey(keyService);
+        const keyName = (ac as any).key_ref ?? ac.provider;
+        const key = await ctx.keychain.getKey(keyName);
         if (key) {
           mainProvider = ac.provider;
           mainModel = ac.model;
           mainKey = key;
-          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} (keychain "${keyService}") for orchestration\n`);
+          process.stderr.write(`[gossipcat] ⚠️  Main agent key unavailable, using ${ac.provider}/${ac.model} (key "${keyName}") for orchestration\n`);
           break;
         }
       }
@@ -1596,7 +1596,7 @@ export function createMcpServer(): McpServer {
         } else {
           // Fallback: use the first agent that has a working key
           for (const ac of agentConfigs) {
-            // #522: honor the per-agent keychain service (key_ref ?? provider).
+            // #522: honor the per-agent key name (key_ref ?? provider).
             const key = await ctx.keychain.getKey((ac as any).key_ref ?? ac.provider);
             if (key) {
               llm = createProvider(ac.provider, ac.model, key, undefined, (ac as any).base_url);
