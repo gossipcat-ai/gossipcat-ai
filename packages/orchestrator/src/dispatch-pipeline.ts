@@ -6,6 +6,7 @@ import { WorkerAgent } from './worker-agent';
 import { emitConsensusSignals } from './signal-helpers';
 import { ILLMProvider } from './llm-client';
 import { loadSkills, resolveEffectiveSkills } from './skill-loader';
+import { createAgentSkillsContentResolver } from './cross-review-skills';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
 import { selectLessons, renderLessonBlock, logLessonInjection } from './lesson-injector';
@@ -231,15 +232,11 @@ export class DispatchPipeline {
       registryGet: config.registryGet,
       projectRoot: config.projectRoot,
       keyProvider: config.keyProvider ?? null,
-      getAgentSkillsContent: (agentId, task) => {
-        const agentSkills = this.registryGet(agentId)?.skills || [];
-        try {
-          const res = loadSkills(agentId, agentSkills, this.projectRoot, this.skillIndex ?? undefined, task);
-          return res.content || undefined;
-        } catch {
-          return undefined;
-        }
-      },
+      getAgentSkillsContent: createAgentSkillsContentResolver({
+        registryGet: (agentId) => this.registryGet(agentId),
+        projectRoot: config.projectRoot,
+        getSkillIndex: () => this.skillIndex,
+      }),
     });
 
     try { this.catalog = new SkillCatalog(config.projectRoot); }

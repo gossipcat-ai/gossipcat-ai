@@ -11,6 +11,7 @@ import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
 import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
+import { buildGatedCrossReviewSkillsResolver } from './cross-review-skill-gate';
 import { makeRoundContext } from '@gossip/orchestrator';
 import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
@@ -610,9 +611,22 @@ export async function handleCollect(
         } catch { /* fail-open: never crash synthesis on observability write */ }
       };
 
+      // Issue #666: cross-reviewers get their own skill files ONLY when the
+      // Phase-1 findings under review contain a critical/high severity. The
+      // builder returns undefined when the gate is closed, and the spread below
+      // then omits `getAgentSkillsContent` entirely so the ungated prompt is
+      // byte-identical to the pre-#666 one.
+      const gatedCrossReviewSkills = buildGatedCrossReviewSkillsResolver({
+        results: allResults,
+        registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
+        projectRoot: process.cwd(),
+        getSkillIndex: () => ctx.mainAgent.getSkillIndex(),
+      });
+
       const engine = new ConsensusEngine({
         llm: mainLlm,
         registryGet: (id: string) => ctx.mainAgent.getAgentConfig(id),
+        ...(gatedCrossReviewSkills ? { getAgentSkillsContent: gatedCrossReviewSkills } : {}),
         projectRoot: process.cwd(),
         agentLlm: (id: string) => agentLlmCache.get(id),
         performanceReader,

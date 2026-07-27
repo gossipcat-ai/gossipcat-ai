@@ -67,9 +67,10 @@ describe('cross-review memory directive (#659)', () => {
   });
 
   it('injects the directive even when no skills block is available', async () => {
-    // The four production ConsensusEngine construction sites outside
-    // consensus-coordinator.ts do NOT pass getAgentSkillsContent, so the
-    // skills block is empty there. The directive must not depend on it.
+    // Most production ConsensusEngine construction sites outside
+    // consensus-coordinator.ts pass no getAgentSkillsContent at all (the
+    // gossip_collect site passes one only when the #666 severity gate opens),
+    // so the skills block is empty there. The directive must not depend on it.
     for (const system of await systemPrompts()) {
       expect(system).not.toContain('--- SKILLS ---');
       expect(system).toContain(CROSS_REVIEW_MEMORY_DIRECTIVE);
