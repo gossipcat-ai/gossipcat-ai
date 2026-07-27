@@ -106,12 +106,12 @@ function readSkillFrontmatter(
 
 /* ── signal index (per-agent, per-normalized-skill) ────────────────────── */
 
-interface SignalEvent {
+export interface SignalEvent {
   ts: number;
   signal: string;
 }
 
-interface SignalIndex {
+export interface SignalIndex {
   /** agentId → normalizedSkill → events (chronological order). */
   byAgentSkill: Map<string, Map<string, SignalEvent[]>>;
 }
@@ -124,7 +124,13 @@ const CORRECT_SIGNALS = new Set([
 ]);
 const HALLUC_SIGNALS = new Set(['disagreement', 'hallucination_caught']);
 
-function buildSignalIndex(projectRoot: string): SignalIndex {
+/**
+ * Exported for direct test coverage of the row-level exclusions (the
+ * `isOperationalClassRow` guard below). Driving this through
+ * `skillsGetHandler` would require a full SkillIndex + frontmatter fixture and
+ * would not isolate the guard.
+ */
+export function buildSignalIndex(projectRoot: string): SignalIndex {
   const idx: SignalIndex = { byAgentSkill: new Map() };
   const perfPath = join(projectRoot, '.gossip', 'agent-performance.jsonl');
   if (!existsSync(perfPath)) return idx;
