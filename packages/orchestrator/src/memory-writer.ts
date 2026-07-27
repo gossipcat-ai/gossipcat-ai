@@ -8,6 +8,7 @@ import type { LLMMessage } from '@gossip/types';
 import { discoverProjectStructure } from './project-structure';
 import { gossipLog } from './log';
 import { emitCitationFabricatedSignal } from './completion-signals';
+import { mergeNextSessionLedger } from './next-session-merge';
 
 /** Truncate text at a word boundary, appending "..." if truncated */
 function truncateAtWord(text: string, maxLen: number): string {
@@ -557,7 +558,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     raw: string;
   }): Promise<SessionArtifacts> {
     const { memDir, knowledgeDir, timestamp, today, rawInput, existingFiles } = this.sessionSummaryData(data);
-    return this.processSessionResponse(data.raw, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles);
+    return this.processSessionResponse(data.raw, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles, data.gitLog);
   }
 
   /**
@@ -597,10 +598,10 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
       const fallback = this.summaryLlm
         ? `> ⚠️ LLM summary failed — raw data below. Review and restructure manually.\n\n${rawInput.slice(0, SESSION_SUMMARY_MAX_CHARS)}`
         : `> ⚠️ No summary LLM configured — raw data below.\n\n${rawInput.slice(0, SESSION_SUMMARY_MAX_CHARS)}`;
-      return this.processSessionResponse(fallback, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles, true);
+      return this.processSessionResponse(fallback, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles, data.gitLog, true);
     }
 
-    return this.processSessionResponse(raw, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles);
+    return this.processSessionResponse(raw, rawInput, knowledgeDir, memDir, today, timestamp, existingFiles, data.gitLog);
   }
 
   /**
@@ -694,6 +695,7 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     today: string,
     timestamp: string,
     existingFiles: string[],
+    gitLog: string,
     isFallback = false,
   ): Promise<SessionArtifacts> {
     const SESSION_SUMMARY_MAX_CHARS = 4000;
@@ -811,9 +813,26 @@ Only mark a file STALE if the git log clearly shows the described work has shipp
     const nextSessionPath = join(this.projectRoot, '.gossip', 'next-session.md');
     const openMatch = summaryBody.match(/##\s+Open[^\n]*\n([\s\S]*?)(?=\n##|\s*$)/i);
     const NEXT_SESSION_MAX_CHARS = 1500;
-    const nextSessionContent = openMatch
+    const generatedNextSession = openMatch
       ? `# Next Session\n\n${openMatch[0].trim()}\n`
       : `# Next Session\n\n${truncateAtWord(summaryBody, NEXT_SESSION_MAX_CHARS)}\n`;
+    // Carry forward the previous ledger (issue #684). The summarizer only reports
+    // items from THIS session, so a wholesale overwrite silently drops every
+    // still-open bullet a prior session left. Fail open: any read/parse problem
+    // falls back to the generated content — next-session.md must always be written.
+    let nextSessionContent = generatedNextSession;
+    try {
+      if (existsSync(nextSessionPath)) {
+        nextSessionContent = mergeNextSessionLedger(
+          readFileSync(nextSessionPath, 'utf-8'),
+          generatedNextSession,
+          gitLog,
+        );
+      }
+    } catch (err) {
+      gossipLog(`next-session.md carry-forward merge skipped: ${(err as Error).message}`);
+      nextSessionContent = generatedNextSession;
+    }
 
     // (c) .gossip/memory/session_YYYY_MM_DD.md — canonical dashboard-visible artifact.
     // Separate store from cognitive knowledge: dashboard-facing, pruned on its own
