@@ -1296,6 +1296,12 @@ Return only valid JSON.${skillsBlock}`;
       }
       signals.push({
         type: 'consensus',
+        // Scoring-class stamp. Category resolution is allowed to fail here (a
+        // logged, expected condition when review vocabulary matches no
+        // CATEGORY_PATTERNS entry) — the stamp is what tells the circuit breaker
+        // an uncategorized row is still a REAL verdict, not a dispatch failure.
+        // See performance-reader.isOperationalDisagreement, consensus c2fb69d4-6a714a73.
+        signal_class: 'performance',
         taskId: getTaskId(entry.originalAgentId),
         consensusId,
         signal: 'hallucination_caught',
@@ -1358,6 +1364,7 @@ Return only valid JSON.${skillsBlock}`;
         });
         signals.push({
           type: 'consensus',
+          signal_class: 'performance',
           taskId: getTaskId(entry.agentId),
           consensusId,
           signal: 'new_finding',
@@ -1386,6 +1393,7 @@ Return only valid JSON.${skillsBlock}`;
           }
           signals.push({
             type: 'consensus',
+            signal_class: 'performance',
             taskId: getTaskId(entry.agentId),
             consensusId,
             signal: 'agreement',
@@ -1439,6 +1447,7 @@ Return only valid JSON.${skillsBlock}`;
             }
             signals.push({
               type: 'consensus',
+              signal_class: 'performance',
               taskId: getTaskId(entry.agentId),
               consensusId,
               signal: 'hallucination_caught',
@@ -1467,6 +1476,10 @@ Return only valid JSON.${skillsBlock}`;
             }
             signals.push({
               type: 'consensus',
+              // Load-bearing: without this stamp an uncategorized synthesis
+              // disagreement is indistinguishable from a collect.ts dispatch
+              // failure and the circuit breaker silently skips a real verdict.
+              signal_class: 'performance',
               taskId: getTaskId(entry.agentId),
               consensusId,
               signal: 'disagreement',
@@ -1502,6 +1515,7 @@ Return only valid JSON.${skillsBlock}`;
           }
           signals.push({
             type: 'consensus',
+            signal_class: 'performance',
             taskId: getTaskId(entry.agentId),
             consensusId,
             signal: 'unverified',
@@ -1581,6 +1595,7 @@ Return only valid JSON.${skillsBlock}`;
             type: 'consensus',
             taskId: getTaskId(entry.originalAgentId),
             consensusId,
+            signal_class: 'performance',
             signal: 'unique_unconfirmed',
             agentId: entry.originalAgentId,
             evidence: capEvidence(`Confirmed finding has unresolvable citation (stale?): "${entry.finding.slice(0, 200)}"`),
@@ -1609,6 +1624,7 @@ Return only valid JSON.${skillsBlock}`;
             type: 'consensus',
             taskId: getTaskId(entry.originalAgentId),
             consensusId,
+            signal_class: 'performance',
             signal: 'unique_confirmed',
             agentId: entry.originalAgentId,
             evidence: capEvidence(entry.finding),
@@ -1640,6 +1656,7 @@ Return only valid JSON.${skillsBlock}`;
         // FIX 5: resolve category via fallback so getCountersSince counts this signal
         signals.push({
           type: 'consensus',
+          signal_class: 'performance',
           taskId: getTaskId(entry.originalAgentId),
           consensusId,
           signal: 'unique_unconfirmed',
@@ -1662,6 +1679,7 @@ Return only valid JSON.${skillsBlock}`;
         // FIX 5: resolve category via fallback so getCountersSince counts this signal
         signals.push({
           type: 'consensus',
+          signal_class: 'performance',
           taskId: getTaskId(entry.originalAgentId),
           consensusId,
           signal: 'unique_unconfirmed',

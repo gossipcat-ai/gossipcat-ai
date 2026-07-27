@@ -44,7 +44,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { ConsensusSignal } from './consensus-types';
-import { readJsonlWithRotated } from './performance-reader';
+import { isOperationalClassRow, readJsonlWithRotated } from './performance-reader';
 import { SAFE_NAME } from './skill-engine';
 
 export const SIDECAR_VERSION = 1;
@@ -391,6 +391,10 @@ export function rebuildAggregateIndex(projectRoot: string): SignalAggregateIndex
   for (const row of rows) {
     if (row.agentId === '_system') continue;
     if (!row.category) continue;
+    // Operational-class rows are telemetry — never accuracy counters. Same
+    // exclusion the raw fallback in performance-reader.getCountersSince applies,
+    // so the sidecar and the fallback agree row-for-row.
+    if (isOperationalClassRow(row)) continue;
     if (classifyForAggregate(row.signal) === 'none') continue;
     const taskKey = row.taskId || row.timestamp;
     if (retractedScoped.has(`${row.agentId}:${taskKey}:${row.signal}`)) continue;
