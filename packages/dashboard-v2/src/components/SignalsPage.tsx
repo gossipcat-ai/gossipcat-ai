@@ -24,6 +24,7 @@ const SIGNAL_TYPES = [
   'unique_confirmed',
   'unique_unconfirmed',
   'disagreement',
+  'design_split',
   'hallucination_caught',
   'new_finding',
   'unverified',
@@ -42,6 +43,9 @@ const SIGNAL_LABELS: Record<string, string> = {
   unique_confirmed: 'Unique (confirmed)',
   unique_unconfirmed: 'Unique (unconfirmed)',
   disagreement: 'Disagreement',
+  // Issue #678 — reads as "they disagreed and it is still open", explicitly NOT
+  // "one of them was wrong". The wording carries the whole distinction here.
+  design_split: 'Design split (unresolved)',
   hallucination_caught: 'Hallucination',
   new_finding: 'New finding',
   unverified: 'Unverified',
@@ -60,6 +64,11 @@ const SIGNAL_LABELS: Record<string, string> = {
 // hallucination = --bad rose, unique/new_finding = --unique purple, unverified = --info teal.
 // Operational pass/fail signals (impl_test_*, impl_typecheck_*) map onto the
 // same ok/bad axis. boundary_escape = --bad (security violation).
+// design_split = --info teal, NOT --bad rose: per DESIGN.md the status palette is
+// semantic, and --bad means "disputed/critical". An unresolved trade-off between
+// two defensible positions is informational — nothing has been shown wrong yet.
+// Sharing rose with `disagreement` would re-create the exact conflation issue
+// #678 exists to remove, this time in the operator's eyes rather than the score.
 const VERDICT_COLOR: Record<string, string> = {
   agreement: 'var(--ok)',
   consensus_verified: 'var(--ok)',
@@ -76,6 +85,7 @@ const VERDICT_COLOR: Record<string, string> = {
   unique_unconfirmed: 'var(--unique)',
   new_finding: 'var(--unique)',
   unverified: 'var(--info)',
+  design_split: 'var(--info)',
 };
 
 // DESIGN.md Step 8 — severity-tick semantic palette. Single color per severity

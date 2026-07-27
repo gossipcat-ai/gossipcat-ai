@@ -242,7 +242,28 @@ export interface ConsensusSignal {
      * circuit-breaker arithmetic. Its payload is the `lesson` text, which is
      * fanned into a recallable lesson card by `writeLessonCardsForSignals`.
      */
-    | 'operational_lesson';
+    | 'operational_lesson'
+    /**
+     * Unresolved design disagreement between two agents (issue #678). Records
+     * that `agentId` and `counterpartId` reached OPPOSED, DEFENSIBLE conclusions
+     * on a trade-off that reading code cannot settle — not that either was
+     * wrong. `disagreement` already means "one side was wrong", so recording a
+     * genuine split as one debits an accuracy that nothing has falsified, and
+     * pushes dispatch weight toward agents that agree.
+     *
+     * Both sides are named (`counterpartId` is REQUIRED at the record surface)
+     * and NEITHER is scored: like `operational_lesson`, it is dropped from
+     * `consensusSignals` before any scoring pass. It accepts EITHER finding_id
+     * grammar — a split can arise inside a consensus round or in a parallel
+     * dispatch that has no consensus id.
+     *
+     * Resolution is a SEPARATE, later signal, not a state transition on this
+     * row: when one side is subsequently shown wrong, the orchestrator records
+     * a normal scoring `disagreement` / `hallucination_caught` against the SAME
+     * `findingId`. The split row stays as the audit trail of what was unresolved
+     * at the time. See HANDBOOK.md invariant #14.
+     */
+    | 'design_split';
   agentId: string;
   counterpartId?: string;
   skill?: string;
@@ -446,6 +467,13 @@ export const OPERATIONAL_SIGNAL_NAMES: ReadonlySet<string> = new Set([
    * than the pipeline emitting it. Never affects accuracy scoring.
    */
   'operational_lesson',
+  /**
+   * Unresolved design disagreement between two agents (issue #678). Operational
+   * for the same reason as the dispatch-hygiene signals above: it is an
+   * observation about the DECISION SPACE, not a verdict on a finding's
+   * correctness. Neither the recorded agent nor its counterpart is scored.
+   */
+  'design_split',
 ]);
 
 /**

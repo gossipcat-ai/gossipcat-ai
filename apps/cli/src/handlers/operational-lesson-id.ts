@@ -1,6 +1,6 @@
 /**
  * Operational (session-scoped) `finding_id` grammar for `gossip_signals`.
- * Issue #668.
+ * Issue #668, extended for `design_split` by issue #678.
  *
  * ## Why a second shape exists
  *
@@ -52,6 +52,25 @@
  * lesson-less operational signal is a row that can never be read back by
  * `gossip_remember` and never affects anything. That is noise, and the contract
  * rejects it up front rather than persisting it.
+ *
+ * ## `design_split` — the one signal that accepts BOTH grammars
+ *
+ * Issue #678. An unresolved design disagreement can arise in two places, and
+ * both are legitimate:
+ *
+ *  - inside a consensus round, where the split has a real consensus id and the
+ *    consensus-scoped shape is the accurate anchor; or
+ *  - in a PARALLEL (non-consensus) dispatch, which produces no consensus id at
+ *    all. Recording that split today required minting a synthetic
+ *    `<taskA>-<taskB>` pair purely to satisfy the regex — the same "fake an
+ *    audit trail" failure the session-scoped shape was introduced to end.
+ *
+ * So `design_split` accepts EITHER shape, unlike `operational_lesson` which is
+ * session-only. That does not soften either grammar: each is still parsed by
+ * its own validator and a value matching NEITHER is still rejected. It only
+ * means the disjointness rule is stated per-signal — the shapes themselves stay
+ * disjoint (a consensus id can never start with the literal `session:`), so
+ * there is never ambiguity about which grammar a given id used.
  */
 
 import { SAFE_NAME } from '@gossip/orchestrator';
@@ -59,8 +78,29 @@ import { SAFE_NAME } from '@gossip/orchestrator';
 /** The one signal name that carries an operator-authored process lesson. */
 export const OPERATIONAL_LESSON_SIGNAL = 'operational_lesson';
 
+/** Unresolved, defensible design disagreement between two agents (issue #678). */
+export const DESIGN_SPLIT_SIGNAL = 'design_split';
+
 /** Literal keyword that opens a session-scoped finding_id. */
 export const OPERATIONAL_ID_PREFIX = 'session:';
+
+/**
+ * Record-surface signal names that are operational-class: `gossip_signals`
+ * stamps `signal_class: 'operational'` on them and `performance-reader.ts`
+ * drops them before every scoring pass, so they move no score for anyone.
+ *
+ * Deliberately a hand-listed set rather than a `classifySignal()` call. That
+ * classifier also returns `'operational'` for auto-fired rows (`task_timeout`,
+ * `transport_failure`, …) which the record surface does not accept, and
+ * returns `'performance'` for the eight scoring names — stamping those would
+ * flip previously-unstamped manual rows from the legacy category-absence
+ * heuristic onto the explicit-stamp path and change circuit-breaker behaviour.
+ * The narrow set keeps this PR's blast radius to the two names it adds.
+ */
+export const OPERATIONAL_RECORD_SIGNALS: ReadonlySet<string> = new Set([
+  OPERATIONAL_LESSON_SIGNAL,
+  DESIGN_SPLIT_SIGNAL,
+]);
 
 /** Human-readable description of BOTH accepted finding_id shapes. */
 export const FINDING_ID_FORMS_HELP =
@@ -68,7 +108,9 @@ export const FINDING_ID_FORMS_HELP =
   '(e.g. "b81956b2-e0fa4ea4:sonnet-reviewer:f1") for consensus signals, or ' +
   '(b) a session-scoped id session:<sessionId>:<slug> ' +
   '(e.g. "session:2026-07-26-a38286c2:relay-window-expired") for signal ' +
-  '"operational_lesson". Both <sessionId> and <slug> must match ' +
+  '"operational_lesson" (session form REQUIRED) or "design_split" (either form ' +
+  'accepted — use (b) for splits from a parallel, non-consensus dispatch). ' +
+  'Both <sessionId> and <slug> must match ' +
   `${SAFE_NAME.source} (lowercase alphanumerics plus _ and -, max 63 chars).`;
 
 /**
@@ -111,6 +153,29 @@ export function isOperationalLessonSignal(signal: string): boolean {
   return signal === OPERATIONAL_LESSON_SIGNAL;
 }
 
+/** True when this signal name records an unresolved design split. */
+export function isDesignSplitSignal(signal: string): boolean {
+  return signal === DESIGN_SPLIT_SIGNAL;
+}
+
+/** True when `gossip_signals` should stamp `signal_class: 'operational'`. */
+export function isOperationalRecordSignal(signal: string): boolean {
+  return OPERATIONAL_RECORD_SIGNALS.has(signal);
+}
+
+/**
+ * True when this signal name may carry a session-scoped `finding_id`.
+ *
+ * Coincides with `OPERATIONAL_RECORD_SIGNALS` today, but is a SEPARATE
+ * predicate on purpose: "is unscored" and "may use the session grammar" are
+ * independent contracts that happen to hold for the same two names right now.
+ * A future unscored signal that is always consensus-anchored would change one
+ * and not the other.
+ */
+export function acceptsSessionScopedFindingId(signal: string): boolean {
+  return isOperationalLessonSignal(signal) || isDesignSplitSignal(signal);
+}
+
 /** Minimal shape `validateOperationalLessonSignal` needs from a signal input. */
 export interface OperationalLessonInput {
   signal: string;
@@ -124,10 +189,12 @@ export interface OperationalLessonInput {
  *
  * Returns an error string to return verbatim to the caller, or `null` when the
  * signal is fine to continue validating on the consensus path. Fail-closed in
- * both directions:
+ * every direction:
  *  - an `operational_lesson` MUST carry a valid session-scoped id and a lesson;
- *  - a NON-operational signal must NOT carry a session-scoped id, so the two
- *    shapes cannot be used interchangeably to dodge either gate.
+ *  - a `design_split` MAY carry either shape, but a MALFORMED session-scoped id
+ *    is still rejected — "accepts either" never means "accepts anything";
+ *  - any other signal must NOT carry a session-scoped id, so the two shapes
+ *    cannot be used interchangeably to dodge either gate.
  *
  * The consensus-scoped shape is deliberately untouched by this function — it is
  * still validated by `FINDING_ID_PREFIX` in the handler, exactly as before.
@@ -138,8 +205,14 @@ export function validateOperationalLessonSignal(s: OperationalLessonInput): stri
     : parseOperationalFindingId(s.finding_id);
 
   if (!isOperationalLessonSignal(s.signal)) {
-    if (parsed.kind !== 'not_operational') {
-      return `Error: finding_id "${s.finding_id}" uses the session-scoped form, which is only valid for signal "${OPERATIONAL_LESSON_SIGNAL}" (received "${s.signal}", agent: ${s.agent_id}). ${FINDING_ID_FORMS_HELP}`;
+    if (parsed.kind === 'invalid' && acceptsSessionScopedFindingId(s.signal)) {
+      // Opted into the session grammar and got it wrong. Report the parse
+      // reason rather than falling through to the consensus-prefix check,
+      // whose message ("expected <8hex>-<8hex>") would misdiagnose it.
+      return `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}) — ${parsed.reason}. ${FINDING_ID_FORMS_HELP}`;
+    }
+    if (parsed.kind !== 'not_operational' && !acceptsSessionScopedFindingId(s.signal)) {
+      return `Error: finding_id "${s.finding_id}" uses the session-scoped form, which is only valid for signals "${OPERATIONAL_LESSON_SIGNAL}" and "${DESIGN_SPLIT_SIGNAL}" (received "${s.signal}", agent: ${s.agent_id}). ${FINDING_ID_FORMS_HELP}`;
     }
     return null;
   }

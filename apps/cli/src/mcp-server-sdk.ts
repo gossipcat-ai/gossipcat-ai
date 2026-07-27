@@ -325,6 +325,10 @@ import { handleCollect } from './handlers/collect';
 import {
   validateOperationalLessonSignal,
   isOperationalLessonSignal,
+  isDesignSplitSignal,
+  isOperationalRecordSignal,
+  acceptsSessionScopedFindingId,
+  parseOperationalFindingId,
   FINDING_ID_FORMS_HELP,
 } from './handlers/operational-lesson-id';
 import { restorePendingConsensus } from './handlers/relay-cross-review';
@@ -3426,13 +3430,13 @@ export function createMcpServer(): McpServer {
       task_id: z.string().optional().describe('Task ID to link signals to. For record: optional (synthetic ID if omitted). For per-signal retract: required.'),
       task_start_time: z.string().optional().describe('ISO-8601 timestamp of the underlying task/consensus round. Used as the per-batch fallback timestamp so bulk-recording from a backlog preserves true chronology. Falls back to wall-clock if omitted.'),
       signals: z.array(z.object({
-        signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected', 'operational_lesson'])
-          .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding), impl_test_pass/fail (write-mode task outcome), impl_peer_approved/rejected (peer code review verdict), operational_lesson (operator-authored PROCESS failure — no consensus round; requires finding_id "session:<sessionId>:<slug>" and a non-empty lesson; never affects accuracy scoring)'),
+        signal: z.enum(['agreement', 'disagreement', 'unique_confirmed', 'unique_unconfirmed', 'new_finding', 'hallucination_caught', 'impl_test_pass', 'impl_test_fail', 'impl_peer_approved', 'impl_peer_rejected', 'operational_lesson', 'design_split'])
+          .describe('Signal type: agreement (both agree), disagreement (one wrong), unique_confirmed (only one found it + verified), unique_unconfirmed (only one found it, unverified), new_finding (discovered during cross-review), hallucination_caught (fabricated finding), impl_test_pass/fail (write-mode task outcome), impl_peer_approved/rejected (peer code review verdict), operational_lesson (operator-authored PROCESS failure — no consensus round; requires finding_id "session:<sessionId>:<slug>" and a non-empty lesson; never affects accuracy scoring), design_split (two agents reached OPPOSED but DEFENSIBLE conclusions on a trade-off that reading code cannot settle — records BOTH sides and scores NEITHER. counterpart_id is REQUIRED; `finding` must state BOTH positions, not just one; category is optional. Accepts either finding_id shape, so a split from a parallel non-consensus dispatch can use "session:<sessionId>:<slug>". Use this INSTEAD of disagreement whenever no side has been shown wrong — "disagreement" means "one wrong" and debits accuracy. RESOLUTION IS A SEPARATE, LATER SIGNAL: if one side is subsequently shown wrong, record a normal scoring disagreement/hallucination_caught against the SAME finding_id; the split row stays as the audit trail of what was unresolved at the time)'),
         agent_id: z.string().describe('Agent being evaluated'),
         counterpart_id: z.string().optional().describe('The other agent involved (e.g., who won the disagreement)'),
         finding: z.string().describe('Brief description of the finding'),
         lesson: z.string().optional().describe('Root-cause narrative for a terminal correction signal — 1-2 sentences on why it failed and the check that would have caught it. Written verbatim into the discovering agent\'s lesson card (issue #642 A).'),
-        finding_id: z.string().optional().describe('Finding ID. Two accepted shapes: (a) consensus-scoped "<8hex>-<8hex>:<agent>:fN" — links this signal to a specific finding in a consensus report, enabling the dashboard to resolve UNVERIFIED findings; (b) session-scoped "session:<sessionId>:<slug>" — REQUIRED and only valid for signal "operational_lesson". Both <sessionId> and <slug> must be safe path segments; a path-unsafe value is rejected, never sanitized.'),
+        finding_id: z.string().optional().describe('Finding ID. Two accepted shapes: (a) consensus-scoped "<8hex>-<8hex>:<agent>:fN" — links this signal to a specific finding in a consensus report, enabling the dashboard to resolve UNVERIFIED findings; (b) session-scoped "session:<sessionId>:<slug>" — REQUIRED for signal "operational_lesson", OPTIONAL for "design_split" (which accepts either shape, so splits from parallel non-consensus dispatches need no synthetic consensus id), and rejected on every other signal. Both <sessionId> and <slug> must be safe path segments; a path-unsafe value is rejected, never sanitized.'),
         cross_cutting: z.boolean().optional().describe('Explicit opt-in (no heuristic), VALID ONLY on signal "operational_lesson": file this signal\'s lesson card in the shared .gossip/agents/_project/memory/knowledge/ instead of the recording agent\'s own knowledge dir. Use for lessons every contributor needs (e.g. "a dist-mcp bundle built inside a git worktree is always broken"). Ignored (with a log line) on consensus verdict signals such as hallucination_caught — those are per-agent findings and must not be published as shared blame cards. The signal row itself stays attributed to agent_id; only the card moves, and it records origin_agent in frontmatter.'),
         severity: z.enum(['critical', 'high', 'medium', 'low']).optional().describe('Finding severity for impact scoring. If omitted, defaults to medium.'),
         category: z.string().optional().describe('Finding category for ATI competency profiles (e.g., concurrency, trust_boundaries, injection_vectors, resource_exhaustion, type_safety, error_handling, data_integrity, input_validation)'),
@@ -3740,7 +3744,11 @@ export function createMcpServer(): McpServer {
         const batchFallback = task_start_time || wallClock;
         const MAX_EVIDENCE_LENGTH = 2000;
         const PUNITIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
-        const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement', 'impl_peer_approved', 'impl_peer_rejected']);
+        // `design_split` is in this set because naming both sides is the whole
+        // point: a split with one side recorded is indistinguishable from a
+        // verdict, and the second agent would silently vanish from the audit
+        // trail of a disagreement it was half of. Issue #678.
+        const COUNTERPART_REQUIRED = new Set(['agreement', 'disagreement', 'impl_peer_approved', 'impl_peer_rejected', 'design_split']);
 
         // finding_id schema gate. TWO shapes are accepted, and only two:
         //
@@ -3751,9 +3759,12 @@ export function createMcpServer(): McpServer {
         //       unchanged: a malformed value silently breaks round-retraction
         //       prefix-match (performance-reader.ts) and resolve scoping.
         //   (b) session-scoped — `session:<sessionId>:<slug>`, valid ONLY for
-        //       signal "operational_lesson" (issue #668). Process failures have
-        //       no consensus round, so requiring (a) forced operators to invent
-        //       filler consensus ids. See handlers/operational-lesson-id.ts.
+        //       signal "operational_lesson" (issue #668, session form REQUIRED)
+        //       and "design_split" (issue #678, EITHER form accepted). Process
+        //       failures have no consensus round, and neither do splits that
+        //       surface in a parallel dispatch, so requiring (a) forced
+        //       operators to invent filler consensus ids. See
+        //       handlers/operational-lesson-id.ts.
         //
         // Anything else is rejected loudly rather than persisted as an
         // unauditable signal — fail-closed, never sanitize-and-continue.
@@ -3764,6 +3775,14 @@ export function createMcpServer(): McpServer {
           // Operational lessons were fully validated above (shape (b)); skip the
           // consensus-prefix check so the two grammars stay disjoint.
           if (isOperationalLessonSignal(s.signal)) continue;
+          // `design_split` may use EITHER shape. When it actually used (b) the
+          // validator above already accepted it, so skip (a)'s check; when it
+          // used anything else, fall through and hold it to (a).
+          if (
+            s.finding_id !== undefined &&
+            acceptsSessionScopedFindingId(s.signal) &&
+            parseOperationalFindingId(s.finding_id).kind === 'valid'
+          ) continue;
           if (s.finding_id !== undefined && !FINDING_ID_PREFIX.test(s.finding_id)) {
             return { content: [{ type: 'text' as const, text: `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}). ${FINDING_ID_FORMS_HELP} See CLAUDE.md signal contract.` }] };
           }
@@ -3819,12 +3838,13 @@ export function createMcpServer(): McpServer {
           if (task_start_time) return new Date(new Date(task_start_time).getTime() + i).toISOString();
           return new Date(wallClockMs + i).toISOString();
         };
-        // `signal_class` is stamped only for operator-authored process lessons
-        // (issue #668) so dashboards can partition them without re-deriving the
-        // class from the signal name. Scoring exclusion does NOT depend on this
-        // field — performance-reader.ts drops `operational_lesson` from
-        // `consensusSignals` outright — it is display metadata, matching the
-        // write-forward-only contract documented on `SignalClass`.
+        // `signal_class` is stamped only for the operational record signals
+        // (`operational_lesson`, issue #668; `design_split`, issue #678) so
+        // dashboards can partition them without re-deriving the class from the
+        // signal name. Scoring exclusion does NOT depend on this field —
+        // performance-reader.ts drops both from `consensusSignals` outright —
+        // it is display metadata, matching the write-forward-only contract
+        // documented on `SignalClass`.
         const formatted: PS[] = signals.map((s, i): PS => {
           const ts = resolveTs(s, i);
           const taskId = task_id || `manual-${batchFallback.replace(/[:.]/g, '')}-${i}`;
@@ -3843,7 +3863,7 @@ export function createMcpServer(): McpServer {
           return {
             type: 'consensus',
             signal: s.signal as Exclude<typeof s.signal, 'impl_test_pass' | 'impl_test_fail' | 'impl_peer_approved' | 'impl_peer_rejected'>,
-            signal_class: isOperationalLessonSignal(s.signal) ? 'operational' : undefined,
+            signal_class: isOperationalRecordSignal(s.signal) ? 'operational' : undefined,
             agentId: s.agent_id,
             taskId,
             counterpartId: s.counterpart_id,
@@ -4209,6 +4229,13 @@ export function createMcpServer(): McpServer {
         // score at all (performance-reader drops them before every scoring pass), so
         // showing one as "-1" would tell an operator recording their own process mistake
         // that they had just penalized an agent. Issue #668.
+        //
+        // `design_split` gets the same separate treatment for the same reason, and is
+        // ALSO credited to the counterpart (issue #678). The `-1` that issue reports is
+        // exactly this line: rendering an unresolved trade-off as a negative told the
+        // operator they had penalized deepseek-challenger for arguing a defensible
+        // position. Both sides are named, so both sides must show up as unscored — a
+        // split attributed to one agent reads as a verdict against the other.
         const POSITIVE_SIGNALS = new Set([
           'agreement',
           'unique_confirmed',
@@ -4216,28 +4243,44 @@ export function createMcpServer(): McpServer {
           'impl_test_pass',
           'impl_peer_approved',
         ]);
-        const byAgent = new Map<string, { pos: number; neg: number; lessons: number }>();
+        type SummaryEntry = { pos: number; neg: number; lessons: number; splits: number };
+        const byAgent = new Map<string, SummaryEntry>();
+        const ensureEntry = (id: string): SummaryEntry => {
+          const entry = byAgent.get(id) || { pos: 0, neg: 0, lessons: 0, splits: 0 };
+          byAgent.set(id, entry);
+          return entry;
+        };
         for (const s of deduped) {
-          const entry = byAgent.get(s.agentId) || { pos: 0, neg: 0, lessons: 0 };
+          const entry = ensureEntry(s.agentId);
           if (isOperationalLessonSignal(s.signal)) entry.lessons++;
+          else if (isDesignSplitSignal(s.signal)) {
+            entry.splits++;
+            const counterpart = s.type === 'consensus' ? s.counterpartId : undefined;
+            if (counterpart && counterpart !== s.agentId) ensureEntry(counterpart).splits++;
+          }
           else if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;
           else entry.neg++;
-          byAgent.set(s.agentId, entry);
         }
 
         const summary = Array.from(byAgent.entries())
-          .map(([id, { pos, neg, lessons }]) =>
-            `  ${id}: +${pos} / -${neg}${lessons > 0 ? ` (${lessons} lesson${lessons === 1 ? '' : 's'}, unscored)` : ''}`)
+          .map(([id, { pos, neg, lessons, splits }]) => {
+            const notes: string[] = [];
+            if (lessons > 0) notes.push(`${lessons} lesson${lessons === 1 ? '' : 's'}, unscored`);
+            if (splits > 0) notes.push(`${splits} design split${splits === 1 ? '' : 's'}, unscored`);
+            return `  ${id}: +${pos} / -${neg}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`;
+          })
           .join('\n');
 
         const taskIdList = deduped.map(f => `  ${f.agentId}: ${f.taskId}`).join('\n');
         // Only claim dispatch-weight impact when something recorded can actually
-        // move it. An all-lessons batch influences nothing — saying otherwise
-        // contradicts the contract the operator just relied on.
-        const scoringCount = deduped.filter(s => !isOperationalLessonSignal(s.signal)).length;
+        // move it. An all-lessons / all-splits batch influences nothing — saying
+        // otherwise contradicts the contract the operator just relied on.
+        const scoringCount = deduped.filter(
+          s => !isOperationalLessonSignal(s.signal) && !isDesignSplitSignal(s.signal),
+        ).length;
         const effectLine = scoringCount > 0
           ? 'These will influence future agent selection via dispatch weighting.'
-          : 'Recorded for recall only — operational lessons never influence dispatch weighting.';
+          : 'Recorded for recall only — operational lessons and design splits never influence dispatch weighting.';
         let baseReceipt = `Recorded ${deduped.length} consensus signals:\n${summary}\n\nTask IDs (for retraction):\n${taskIdList}\n\n${effectLine}`;
         if (missingFindingIdCount > 0) {
           baseReceipt += `\n\n⚠ ${missingFindingIdCount} signal(s) recorded without finding_id — unauditable, see CLAUDE.md contract`;

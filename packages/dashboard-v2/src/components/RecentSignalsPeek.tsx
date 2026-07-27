@@ -17,6 +17,8 @@ const LABELS: Record<string, string> = {
   unique_confirmed: 'unique',
   unique_unconfirmed: 'unique?',
   disagreement: 'disputed',
+  // Issue #678 — "split" reads as unresolved; "disputed" would read as settled.
+  design_split: 'split',
   hallucination_caught: 'hallucination',
   new_finding: 'new',
   unverified: 'unverified',
@@ -27,6 +29,7 @@ const VERDICT_COLOR: Record<string, string> = {
   agreement: 'var(--ok)',
   consensus_verified: 'var(--ok)',
   disagreement: 'var(--bad)',
+  design_split: 'var(--info)',
   hallucination_caught: 'var(--bad)',
   unique_confirmed: 'var(--unique)',
   unique_unconfirmed: 'var(--warn)',

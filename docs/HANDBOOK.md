@@ -179,6 +179,15 @@ session:<sessionId>:<slug>
 
 Set `cross_cutting: true` to file the resulting lesson card in `.gossip/agents/_project/memory/knowledge/` instead of the recording agent's own dir. Use it for lessons every contributor needs (e.g. *a dist-mcp bundle built inside a git worktree is always broken, because the nested `packages/tools/node_modules/zod` is unreachable from a worktree*), since an agent-scoped card is only reachable by a query carrying that agent's id. It is an explicit opt-in — nothing infers it from the lesson text — and the card records `origin_agent` so provenance survives the move.
 
+**Unresolved design splits (`design_split`, issue #678).** `disagreement` means *one side was wrong* and debits that agent's accuracy. When two agents reach **opposed but defensible** conclusions on a trade-off that reading code cannot settle, recording a `disagreement` penalises an accuracy nothing has falsified — and, because dispatch weight derives from accuracy, pushes the fleet toward agents that agree. That is backwards for a design whose value is independent perspectives. Record `design_split` instead:
+
+- `counterpart_id` is **REQUIRED** and `finding` must state **both** positions — a one-sided split reads as a verdict against the absent agent.
+- **Neither side is scored.** It is in `OPERATIONAL_SIGNAL_NAMES`, and `performance-reader.ts` drops it from `consensusSignals` before every pass, so it moves no accuracy, no uniqueness, and no circuit-breaker streak for either agent. (Filtering, not a no-op switch arm: a merely-unscored row would still advance the per-agent task index for *both* ids, re-weighting decay, and would break a real failure streak.)
+- It accepts **either** `finding_id` grammar — consensus-scoped in a round, session-scoped (`session:<sessionId>:<slug>`) in a **parallel** dispatch that has no consensus id. `operational_lesson` stays session-only. The dashboard renders it as *Design split (unresolved)* in `--info` teal, never the rose `disputed` bucket.
+- **Resolution is a later, separate signal — not a state transition.** If one side is subsequently shown wrong, record a normal scoring `disagreement` / `hallucination_caught` against the **same `finding_id`**. The split row stays as the audit trail of what was genuinely unresolved at the time; the penalty lands at resolution, where the evidence is.
+
+**Historical `disagreement` rows are deliberately NOT migrated.** They were recorded under the old contract, where `disagreement` was the only way to record any disagreement at all — so the class of each one (real verdict vs. unresolved split) is not recoverable from the row. A blanket rewrite would either erase real penalties or fabricate exonerations; a heuristic rewrite would do both silently. The taxonomy change is **forward-only**: old rows keep the semantics they were recorded with, and the hallucination decay half-life (20 tasks) retires mis-classed penalties on its own.
+
 ---
 
 ## Operator playbook (for orchestrator LLMs)

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'fs';
 import { join } from 'path';
-import { readJsonlWithRotated } from '@gossip/orchestrator';
+import { readJsonlWithRotated, isOperationalClassRow } from '@gossip/orchestrator';
 
 export interface FleetTrendPoint {
   day: string; // ISO date YYYY-MM-DD
@@ -62,6 +62,15 @@ export async function fleetTrendHandler(projectRoot: string, query?: URLSearchPa
       try {
         const rec = JSON.parse(line);
         if (rec.type !== 'consensus' || !rec.agentId || rec.agentId === '_system' || !rec.timestamp) continue;
+        // Operational-class rows are telemetry, never accuracy. This chart's
+        // `total` is the accuracy DENOMINATOR, so an unfiltered operational row
+        // is scored here even though every scoring surface excludes it: it can
+        // never increment `good`, so it silently drags the plotted accuracy
+        // down. That would make `design_split` (issue #678) debit a displayed
+        // accuracy for both named agents — the exact outcome the signal exists
+        // to prevent. Same guard, same helper, as api-skills.ts:175,
+        // signal-aggregate-index rebuild, and performance-reader.getCountersSince.
+        if (isOperationalClassRow(rec)) continue;
         const t = Date.parse(rec.timestamp);
         if (!Number.isFinite(t) || t < cutoff) continue;
         const day = new Date(t).toISOString().slice(0, 10);

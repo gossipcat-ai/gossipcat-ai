@@ -16,6 +16,7 @@ import {
   type SignalAggregateIndexData,
 } from './signal-aggregate-index';
 import { readSkillFreshness } from './skill-freshness';
+import { isOperationalClassRow } from './performance-reader';
 
 /**
  * Fix 5 (spec 2026-04-27-self-telemetry-remediation §Fix 5): rate-limited
@@ -86,6 +87,11 @@ export const VALID_CONSENSUS_SIGNALS = new Set([
   // `consensusSignals` entirely, so it moves no score. Must be listed here or
   // validateSignal drops every emit (the PR #329 failure mode).
   'operational_lesson',
+  // Unresolved design disagreement between two agents (issue #678) — both sides
+  // named, neither scored. Same operational treatment as `operational_lesson`:
+  // performance-reader.ts filters it out of `consensusSignals` entirely. Must be
+  // listed here or validateSignal drops every emit (the PR #329 failure mode).
+  'design_split',
 ]);
 
 export const VALID_IMPL_SIGNALS = new Set([
@@ -234,9 +240,22 @@ const INTERNAL = Symbol('performance-writer-internal');
 /**
  * Resolve a (boundAtMs, signalForAggregate) pair for a consensus signal that
  * should contribute to the sidecar. Returns null when:
- *   - the signal is not a per-agent accuracy signal (operational / unknown), OR
+ *   - the signal's agent is the `_system` sentinel (round-level tombstone), OR
  *   - the signal carries no `category` (sidecar partitions by category), OR
- *   - the signal's agent is the `_system` sentinel (round-level tombstone).
+ *   - the row is operational-class (telemetry, never an accuracy counter), OR
+ *   - the signal is not a per-agent accuracy signal (`classifyForAggregate`).
+ *
+ * The `isOperationalClassRow` guard is the WRITE-side half of a pair — the
+ * rebuild path (`signal-aggregate-index.rebuildAggregateIndex`) has applied the
+ * same guard since the operational-class work landed, but this incremental
+ * fold-in did not. `classifyForAggregate` alone does not cover it: it keys off
+ * the signal NAME, so a categorized `disagreement` stamped
+ * `signal_class: 'operational'` (a failed dispatch auto-recorded by
+ * handlers/collect.ts) classified as `hallucinated` and folded in here, while a
+ * later rebuild dropped it. Sidecar and rebuild then disagreed for the same
+ * jsonl — the sidecar reporting hallucinations the reader's raw fallback never
+ * counts. Issue #678 ledger item; pinned by
+ * tests/orchestrator/aggregate-key-operational-exclusion.test.ts.
  */
 function deriveAggregateKey(
   signal: PerformanceSignal,
@@ -247,6 +266,7 @@ function deriveAggregateKey(
   const cs = signal as ConsensusSignal;
   if (cs.agentId === '_system') return null;
   if (!cs.category) return null;
+  if (isOperationalClassRow(cs)) return null;
   if (classifyForAggregate(cs.signal) === 'none') return null;
   const ts = cs.timestamp ? new Date(cs.timestamp).getTime() : 0;
   if (!isFinite(ts) || ts === 0) return null;
