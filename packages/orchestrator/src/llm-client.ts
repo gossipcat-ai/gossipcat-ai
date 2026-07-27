@@ -1163,23 +1163,26 @@ export function createProviderForAgent(
   keyRef?: string,
 ): ILLMProvider {
   if ((KEY_REQUIRING_PROVIDERS as readonly string[]).includes(provider) && !apiKey) {
-    // Name the keychain SERVICE the resolver tried (key_ref ?? provider) so a
-    // missing per-agent key is actionable — the operator knows exactly which
-    // service to store. Service names are safe to log; never the key value. #522
-    const service = keyRef ?? provider;
+    // Name the KEY the resolver tried (key_ref ?? provider) so a missing
+    // per-agent key is actionable. Do NOT call it a "keychain service": the
+    // keychain service is always the `gossip-mesh` constant and this name is
+    // the ACCOUNT under it — and on platforms without an OS keychain the key
+    // lands in the encrypted file instead. Name the command, not the store.
+    // Key names are safe to log; never the key value. #522 / #667
+    const keyName = keyRef ?? provider;
     return new DegradedProvider(
       `no API key configured for agent "${agentId}" (provider ${provider}, ` +
-      `base_url ${baseUrl ?? 'default'}); set the key for keychain service "${service}"`,
+      `base_url ${baseUrl ?? 'default'}); run 'gossipcat key set "${keyName}"'`,
     );
   }
-  // Auth-failure slot = the keychain SERVICE the operator must fix (key_ref ??
-  // provider), so gossip_status names the right `gossipcat key set <service>`.
+  // Auth-failure slot = the KEY NAME the operator must fix (key_ref ??
+  // provider), so gossip_status names the right `gossipcat key set <name>`.
   // Distinct from the quota slot (per-endpoint rate-limit state). #522
   return createProvider(provider, model, apiKey, projectRoot, baseUrl, keyRef ?? provider);
 }
 
 /**
- * Pure async helper: resolves the per-agent keychain service (key_ref ?? provider),
+ * Pure async helper: resolves the per-agent key name (key_ref ?? provider),
  * fetches the key via the injected `getKey` callback, then delegates to
  * {@link createProviderForAgent}. Extracted from the doBoot inline block so the
  * key-resolution + provider-construction path can be unit-tested without a
@@ -1187,7 +1190,7 @@ export function createProviderForAgent(
  *
  * @param ac  Minimal agent config shape — same fields used at every construction site.
  * @param getKey  Injected key lookup (e.g. `(s) => ctx.keychain.getKey(s)`); returns
- *                `null` when the service has no stored key.
+ *                `null` when that key name has nothing stored.
  */
 export async function resolveAgentProvider(
   ac: { id: string; provider: string; model: string; base_url?: string; key_ref?: string },

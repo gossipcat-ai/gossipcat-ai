@@ -11,12 +11,16 @@
  * through the LLM tool layer would be a trust-boundary violation.
  */
 import { KEY_REQUIRING_PROVIDERS } from '@gossip/orchestrator';
+import type { KeyStoreInfo, KeyStoreKind } from './keychain';
 
 const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
 
 export interface KeyCommandIO {
-  setKey(provider: string, key: string): Promise<void>;
+  /** Resolves to the store the key ACTUALLY landed in (keychain writes can fall back to file). */
+  setKey(provider: string, key: string): Promise<KeyStoreKind>;
   getKey(provider: string): Promise<string | null>;
+  /** Which store this invocation resolved to — reported to the operator, never guessed. */
+  storeInfo(): KeyStoreInfo;
   readSecret(): Promise<string>;
   out(line: string): void;
   err(line: string): void;
@@ -24,8 +28,16 @@ export interface KeyCommandIO {
 
 const USAGE =
   'Usage:\n' +
-  '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
-  '  gossipcat key list             Show which providers have a stored key';
+  '  gossipcat key set <provider>   Store an API key (OS keychain when available, else encrypted file)\n' +
+  '  gossipcat key list             Show the resolved store and which providers have a stored key';
+
+/**
+ * Human-readable destination for a given store kind. The file case always names
+ * the ABSOLUTE path so a relay-vs-CLI cwd mismatch is visible at a glance.
+ */
+function describeStore(kind: KeyStoreKind, info: KeyStoreInfo): string {
+  return kind === 'keychain' ? `keychain (service ${info.service})` : `file ${info.path}`;
+}
 
 /** args = everything AFTER `key`. Returns exit code (0 ok, 2 usage/error). */
 export async function runKeyCommand(args: string[], io: KeyCommandIO): Promise<number> {
@@ -47,12 +59,20 @@ export async function runKeyCommand(args: string[], io: KeyCommandIO): Promise<n
       io.err('no key provided (stdin was empty)');
       return 2;
     }
-    await io.setKey(provider, key);
-    io.out(`stored key for "${provider}" in the gossip-mesh keychain`);
+    // Report the destination setKey actually used — a failed keychain write
+    // falls back to the encrypted file, and claiming "keychain" there is a lie.
+    const written = await io.setKey(provider, key);
+    io.out(`stored key for "${provider}" in ${describeStore(written, io.storeInfo())}`);
     return 0;
   }
 
   if (sub === 'list') {
+    const info = io.storeInfo();
+    io.out(
+      info.kind === 'keychain'
+        ? `(store: keychain  service ${info.service})`
+        : `(store: file  ${info.path})`,
+    );
     for (const provider of KEY_REQUIRING_PROVIDERS) {
       const value = await io.getKey(provider);
       const present = typeof value === 'string' && value.length > 0;

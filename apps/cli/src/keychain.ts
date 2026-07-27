@@ -9,6 +9,24 @@ const VALID_PROVIDERS = /^[a-zA-Z0-9_-]{1,32}$/;
 const ENCRYPTED_FILE = '.gossip/keys.enc';
 const ALGO = 'aes-256-gcm';
 
+/** Which store a key actually lives in / was actually written to. */
+export type KeyStoreKind = 'keychain' | 'file';
+
+/** Where this Keychain instance resolved its store to. Never contains key values. */
+export interface KeyStoreInfo {
+  kind: KeyStoreKind;
+  /** OS-keychain service name — always the `gossip-mesh` constant, not the provider. */
+  service: string;
+  /**
+   * ABSOLUTE path of the encrypted key file. Always populated: it is the live
+   * store when `kind === 'file'`, and the fallback destination a failed keychain
+   * write drops to when `kind === 'keychain'` (see {@link Keychain.setKey}).
+   * Absolute because it is cwd-derived — relay-vs-CLI cwd mismatches are only
+   * visible if the full path is shown.
+   */
+  path: string;
+}
+
 export class Keychain {
   private inMemoryStore: Map<string, string> = new Map();
   private keychainAvailable: boolean;
@@ -34,18 +52,34 @@ export class Keychain {
     return this.inMemoryStore.get(provider) || null;
   }
 
-  async setKey(provider: string, key: string): Promise<void> {
+  /** Where keys resolve for this instance. Safe to print: no key values. */
+  storeInfo(): KeyStoreInfo {
+    return {
+      kind: this.keychainAvailable ? 'keychain' : 'file',
+      service: this.serviceName,
+      path: join(process.cwd(), ENCRYPTED_FILE),
+    };
+  }
+
+  /**
+   * @returns the store the key ACTUALLY landed in. A failed keychain write
+   * silently falls back to the encrypted file, so callers must report this
+   * value rather than assuming {@link storeInfo}'s `kind`.
+   */
+  async setKey(provider: string, key: string): Promise<KeyStoreKind> {
     this.inMemoryStore.set(provider, key);
     if (this.keychainAvailable) {
       try {
         this.writeToKeychain(provider, key);
+        return 'keychain';
       } catch {
         // Keychain write failed — fall through to encrypted file
         this.saveEncryptedFile();
+        return 'file';
       }
-    } else {
-      this.saveEncryptedFile();
     }
+    this.saveEncryptedFile();
+    return 'file';
   }
 
   private deriveKey(salt: Buffer): Buffer {
