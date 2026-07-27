@@ -229,6 +229,40 @@ const NEGATIVE_SIGNALS = new Set(['hallucination_caught', 'disagreement']);
 const NEGATIVE_IMPL_SIGNALS = new Set(['impl_test_fail', 'impl_peer_rejected']);
 const SIGNAL_EXPIRY_DAYS = 30;
 
+/**
+ * Operational-class `disagreement` predicate — the single source of truth shared
+ * by the accuracy loop and the circuit-breaker streak builder so the two cannot
+ * drift apart.
+ *
+ * A failed dispatch (quota exhaustion, context overflow, model unavailable) is
+ * auto-recorded as a `disagreement` by apps/cli/src/handlers/collect.ts, carrying
+ * `signal_class: 'operational'` and NO `category` — it describes a transport /
+ * lifecycle failure, not a finding-evaluation verdict. Per docs/HANDBOOK.md
+ * invariant #14 these rows are telemetry and must never move a score: excluded
+ * from accuracy arithmetic AND from the circuit-breaker streak.
+ *
+ * The category-absence test is load-bearing (it matches the accuracy loop's
+ * established semantics and covers historical rows written before `signal_class`
+ * stamping existed); the `signal_class` test is a belt-and-braces second axis.
+ */
+function isOperationalDisagreement(signal: ConsensusSignal): boolean {
+  if (signal.signal !== 'disagreement') return false;
+  return !signal.category || signal.signal_class === 'operational';
+}
+
+/** A `disagreement` row that participates in scoring — always carries a category. */
+type ScoringDisagreement = ConsensusSignal & { signal: 'disagreement'; category: string };
+
+/**
+ * Exact inverse of `isOperationalDisagreement` for `disagreement` rows, as a
+ * type predicate so the accuracy arm can index `categoryHallucinated` without a
+ * non-null assertion. Defined in terms of the shared predicate — it cannot
+ * disagree with it.
+ */
+function isScoringDisagreement(signal: ConsensusSignal): signal is ScoringDisagreement {
+  return signal.signal === 'disagreement' && !isOperationalDisagreement(signal);
+}
+
 /** Known consensus signal types — used to filter valid signals in computeScores */
 const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   agreement: true,
@@ -1057,7 +1091,11 @@ export class PerformanceReader {
           // still arriving uncategorized is operational and must not touch
           // weightedTotal/disagreements. Mirrors the task_timeout/task_empty
           // no-op pattern below at :669-673.
-          if (!signal.category) {
+          //
+          // Shares `isOperationalDisagreement` with the circuit-breaker streak
+          // builder below so the accuracy path and the breaker path cannot
+          // diverge on what counts as operational.
+          if (!isScoringDisagreement(signal)) {
             break;
           }
           a.scoringSignals++;
@@ -1232,6 +1270,18 @@ export class PerformanceReader {
       // (would reset a real failure streak). Treat it as if absent so a relay
       // cwd outage neither benches nor rehabilitates the agent.
       if (signal.signal === 'transport_failure') continue;
+      // Same exclusion for operational-class disagreements — a dispatch that
+      // died on quota exhaustion / context overflow / model-unavailable is
+      // auto-recorded as a category-less `disagreement` by
+      // apps/cli/src/handlers/collect.ts. `NEGATIVE_SIGNALS` contains
+      // 'disagreement', so without this guard a run of infrastructure failures
+      // opens the breaker and benches a healthy agent (observed 2026-07-27:
+      // six consecutive quota failures floored sonnet-reviewer's dispatch
+      // weight at 0.30). The accuracy loop already excludes these rows via the
+      // shared `isOperationalDisagreement` predicate; treating them as absent
+      // here keeps the two paths consistent. "Absent" is exact: they neither
+      // count as a negative NOR rehabilitate a real failure streak.
+      if (isOperationalDisagreement(signal)) continue;
       const list = signalsByAgent.get(signal.agentId) || [];
       list.push(signal);
       signalsByAgent.set(signal.agentId, list);
