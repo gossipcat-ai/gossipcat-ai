@@ -16,6 +16,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { assemblePrompt } from '../../packages/orchestrator/src/prompt-assembler';
 import { ctx } from '../../apps/cli/src/mcp-context';
 import {
   handleDispatchSingle,
@@ -156,10 +157,76 @@ describe('dispatch-prompt warm cache (Phase 2)', () => {
       expect(body2).toContain('Task: Task TWO');
       expect(body2).not.toContain('Task: Task ONE');
       // Skills prefix should match the cached skills section from r1.
-      const { skillsSection: s1 } = splitAssembledPrompt(body1);
-      const { skillsSection: s2 } = splitAssembledPrompt(body2);
+      const { skillsSection: s1 } = splitAssembledPrompt(body1, '\n\nTask: Task ONE');
+      const { skillsSection: s2 } = splitAssembledPrompt(body2, '\n\nTask: Task TWO');
       expect(s2).toEqual(s1);
       void r1;
+    });
+  });
+
+  describe('Test 1b: task text containing the split anchor (issue #672)', () => {
+    // A brief that QUOTES a prior brief carries `\n\nTask:` as CONTENT. The old
+    // `lastIndexOf('\n\nTask:')` split cut INSIDE the task, so the persisted
+    // skills-section swallowed task 1 and was replayed to every later dispatch
+    // on the same cache key — a cross-task leak through a persisted cache.
+    const QUOTING_TASK = [
+      'Review the brief we sent last round and say whether it was well-scoped.',
+      '',
+      'It said:',
+      '',
+      'Task: unrelated follow-up work about CSS design tokens in the dashboard',
+      '',
+      'That is the whole brief. Assess it.',
+    ].join('\n');
+
+    it('does not leak task 1 text into the cached skills section', () => {
+      const body = assemblePrompt({
+        identity: '## Identity\nagent_id: native-claude',
+        instructions: 'You are a reviewer.',
+        skills: 'IRON LAW: verify before asserting.\n'.repeat(600), // ~21KB, production scale
+        task: QUOTING_TASK,
+      });
+      const liveTaskTail = `\n\nTask: ${QUOTING_TASK}`;
+      expect(body.length).toBeGreaterThan(20_000);
+
+      const { skillsSection, taskBlock } = splitAssembledPrompt(body, liveTaskTail);
+
+      // No part of the task may survive into the cacheable prefix.
+      expect(skillsSection).not.toContain('Task:');
+      expect(skillsSection).not.toContain('Review the brief we sent last round');
+      expect(skillsSection).not.toContain('CSS design tokens');
+      expect(skillsSection.endsWith('\n\n---')).toBe(true);
+      expect(taskBlock).toBe(liveTaskTail);
+    });
+
+    it('fails closed (no caching) when the body does not end with the given tail', () => {
+      // Assembler invariant violated, or a tail from a different dispatch.
+      expect(splitAssembledPrompt('prefix\n\n---\n\nTask: real', '\n\nTask: OTHER').taskBlock).toBe('');
+      expect(splitAssembledPrompt('no boundary at all', '\n\nTask: x').taskBlock).toBe('');
+      // Separator absent — refuse rather than guess.
+      expect(splitAssembledPrompt('prefix\n\nTask: real', '\n\nTask: real').taskBlock).toBe('');
+      expect(splitAssembledPrompt('prefix\n\n---\n\nTask: real', '').taskBlock).toBe('');
+    });
+
+    it('end-to-end: dispatch 2 never sees dispatch 1 task text', async () => {
+      registerNativeAgent();
+      await handleDispatchSingle(
+        'native-claude', QUOTING_TASK,
+        undefined, undefined, undefined, undefined, undefined,
+        undefined, 'elided',
+      );
+      const files1 = listDispatchFiles(workDir);
+      const r2 = await handleDispatchSingle(
+        'native-claude', 'unrelated second task',
+        undefined, undefined, undefined, undefined, undefined,
+        undefined, 'elided',
+      );
+      expect(r2.content[0].text).toContain('warm-cached (skills) + live task');
+      const body2Path = listDispatchFiles(workDir).find(f => !files1.includes(f))!;
+      const body2 = readFileSync(join(workDir, '.gossip', 'dispatch-prompts', body2Path), 'utf8');
+      expect(body2).toContain('Task: unrelated second task');
+      expect(body2).not.toContain('Review the brief we sent last round');
+      expect(body2).not.toContain('CSS design tokens');
     });
   });
 
@@ -395,7 +462,7 @@ describe('dispatch-prompt warm cache (Phase 2)', () => {
   describe('Test 14: splice integrity — cached skills + live task assembly', () => {
     it('splitAssembledPrompt followed by splice yields a body whose Task: tail is fresh', () => {
       const fakeBody = '<identity>\n\n--- SKILLS ---\nx\n--- END SKILLS ---\n\n---\n\nTask: original';
-      const { skillsSection, taskBlock } = splitAssembledPrompt(fakeBody);
+      const { skillsSection, taskBlock } = splitAssembledPrompt(fakeBody, '\n\nTask: original');
       expect(skillsSection).not.toContain('Task:');
       expect(taskBlock).toEqual('\n\nTask: original');
       // Splice a new task tail

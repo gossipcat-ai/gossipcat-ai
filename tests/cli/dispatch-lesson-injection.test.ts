@@ -178,7 +178,10 @@ describe('native dispatch lesson injection (issue #669)', () => {
 
     const cold = assemblePrompt({ ...nativeParts(WORKTREE_TASK), retrievedLessons: block });
     // The cache stores the LESSON-FREE assembly, split at `\n\nTask:`.
-    const { skillsSection, taskBlock } = splitAssembledPrompt(assemblePrompt(nativeParts(WORKTREE_TASK)));
+    const { skillsSection, taskBlock } = splitAssembledPrompt(
+      assemblePrompt(nativeParts(WORKTREE_TASK)),
+      `\n\nTask: ${WORKTREE_TASK}`,
+    );
     expect(taskBlock).not.toBe('');
     expect(composeWarmBody(skillsSection, taskBlock, block)).toBe(cold);
     // …and without lessons the warm body is unchanged.

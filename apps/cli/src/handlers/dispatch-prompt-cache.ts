@@ -204,15 +204,18 @@ function emitCacheEvictedSignal(
 /**
  * Splice helpers — share the boundary contract with dispatch.ts.
  *
- * Splice contract (spec + task description):
- *   - Live `Task:` block = everything from the LAST `\n\nTask:` to end-of-string.
- *   - Cached skills-section = everything BEFORE that boundary.
- *   - Warm-hit body = cachedSkillsSection + extractedLiveTaskBlock.
+ * Splice contract:
+ *   - Live `Task:` block = the caller-supplied `\n\nTask: ${task}` tail.
+ *   - Cached skills-section = the assembled body with exactly that tail removed
+ *     (so it still ends with ASSEMBLER_TASK_SEPARATOR, which composeWarmBody
+ *     relies on to place the RECALLED LESSONS block).
+ *   - Warm-hit body = cachedSkillsSection + liveTaskBlock.
  *
  * The assembler emits exactly one `\n\n---\n\nTask: ${task}` segment at
- * priority 0 (see packages/orchestrator/src/prompt-assembler.ts:280). The
- * structural lint test in tests/orchestrator/dispatch-prompt-cache.test.ts
- * asserts this invariant.
+ * priority 0 (see packages/orchestrator/src/prompt-assembler.ts:332). Priority-0
+ * suffix segments are never dropped and TASK is pushed last, so the assembled
+ * body always ENDS with that segment. The structural lint test in
+ * tests/orchestrator/dispatch-prompt-cache.test.ts asserts this invariant.
  */
 export interface SplitPromptParts {
   skillsSection: string;
@@ -220,19 +223,44 @@ export interface SplitPromptParts {
 }
 
 /**
- * Split an assembled prompt into [skills-section, task-block] at the LAST
- * `\n\nTask:` boundary. If the boundary is missing (assembler invariant
- * violated), returns the whole body as skillsSection and an empty taskBlock
- * — caller MUST treat empty taskBlock as fatal and skip caching.
+ * Separator `assemblePrompt` emits immediately before the TASK segment
+ * (the full segment is `\n\n---\n\nTask: ${task}`). Single owner — dispatch.ts
+ * imports this rather than re-declaring it.
  */
-export function splitAssembledPrompt(body: string): SplitPromptParts {
-  const idx = body.lastIndexOf('\n\nTask:');
-  if (idx < 0) {
+export const ASSEMBLER_TASK_SEPARATOR = '\n\n---';
+
+/**
+ * Split an assembled prompt into [skills-section, task-block].
+ *
+ * `liveTaskTail` is the EXACT tail the caller knows `assemblePrompt` emitted for
+ * this dispatch (`\n\nTask: ${task}`). The boundary is verified by exact suffix
+ * match — `body` must end with `ASSEMBLER_TASK_SEPARATOR + liveTaskTail` — not
+ * recovered by searching the body for a literal that task text may also contain.
+ *
+ * Issue #672: this used to be `body.lastIndexOf('\n\nTask:')`. A task whose own
+ * text contained that sequence (a review brief quoting the brief it reviews, an
+ * inlined spec) moved the cut INSIDE the task, so the persisted skills-section
+ * swallowed part of task 1 and was replayed to every later dispatch on the same
+ * cache key — a cross-task leak through a persisted cache. The search anchor was
+ * also strictly less specific than the separator actually emitted, widening the
+ * collision surface for no benefit.
+ *
+ * Fails CLOSED: if the suffix does not match (assembler invariant violated, or a
+ * caller passed a tail that is not this body's tail), returns the whole body as
+ * skillsSection and an empty taskBlock. Callers MUST treat an empty taskBlock as
+ * fatal and skip caching — `cacheColdPathStore` is the only production caller
+ * and does exactly that.
+ */
+export function splitAssembledPrompt(body: string, liveTaskTail: string): SplitPromptParts {
+  if (!liveTaskTail) return { skillsSection: body, taskBlock: '' };
+  if (!body.endsWith(ASSEMBLER_TASK_SEPARATOR + liveTaskTail)) {
     return { skillsSection: body, taskBlock: '' };
   }
   return {
-    skillsSection: body.slice(0, idx),
-    taskBlock: body.slice(idx),
+    // Keep ASSEMBLER_TASK_SEPARATOR in the cached section — composeWarmBody
+    // splices the lesson block in front of it on a warm hit.
+    skillsSection: body.slice(0, body.length - liveTaskTail.length),
+    taskBlock: liveTaskTail,
   };
 }
 
