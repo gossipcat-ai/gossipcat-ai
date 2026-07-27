@@ -123,6 +123,7 @@ function buildNativeIdentity(agentId: string, model: string): string {
 import { evictStaleNativeTasks, persistNativeTaskMap, spawnTimeoutWatcher } from './native-tasks';
 import { writeDispatchPrompt } from './dispatch-prompt-storage';
 import {
+  ASSEMBLER_TASK_SEPARATOR,
   computeSkillFingerprint,
   getCachedPrompt,
   setCachedPrompt,
@@ -276,13 +277,6 @@ export function tryWarmCacheHit(
 }
 
 /**
- * Separator `assemblePrompt` emits immediately before the TASK segment
- * (`\n\n---\n\nTask: `). `splitAssembledPrompt` cuts at `\n\nTask:`, so the
- * cached skills-section always ends with this string.
- */
-const ASSEMBLER_TASK_SEPARATOR = '\n\n---';
-
-/**
  * Compose a warm-hit body, inserting the RECALLED LESSONS block (issue #669) at
  * the SAME position `assemblePrompt` would place `retrievedLessons` on a cold
  * miss — i.e. as the last suffix segment before the `\n\n---\n\nTask:`
@@ -292,7 +286,9 @@ const ASSEMBLER_TASK_SEPARATOR = '\n\n---';
  * This replaces a post-hoc `lastIndexOf('\n\n---\n\nTask: ')` splice on the
  * finished prompt. That anchor is CONTENT, not structure: a brief that quotes a
  * prior prompt carries the same bytes, and the block landed inside the quoted
- * material. Here the boundary is a string this function itself constructed.
+ * material. Here the boundary is a string this function itself constructed —
+ * `skillsSection` comes from `splitAssembledPrompt`, which cuts by exact
+ * caller-supplied suffix (issue #672), so the `\n\n---` tail is structural.
  *
  * The cap re-check exists because the cached skills-section was sized by
  * `assemblePrompt` against a DIFFERENT task, so its priority-drop pass cannot
@@ -314,18 +310,24 @@ export function composeWarmBody(
 }
 
 /**
- * Phase-2 cache cold-path store. Call after assemblePrompt on a miss. Splits
- * the assembled body at the LAST `\n\nTask:` boundary, persists the prefix to
- * a content-addressed skills-section file, and inserts a cache entry keyed by
- * the supplied PromptCacheKey. No-op if liveTaskBlock could not be extracted
- * (assembler invariant violated — skip caching defensively).
+ * Phase-2 cache cold-path store. Call after assemblePrompt on a miss. Strips the
+ * caller-supplied live `Task:` tail off the assembled body by EXACT suffix match,
+ * persists the remaining prefix to a content-addressed skills-section file, and
+ * inserts a cache entry keyed by the supplied PromptCacheKey.
+ *
+ * `liveTaskTail` must be the same `\n\nTask: ${task}` string the caller hands
+ * `tryWarmCacheHit` — passing it makes the cold/warm splice boundary an
+ * assertion rather than a search (issue #672). No-op if the suffix does not
+ * match (assembler invariant violated, or the tail belongs to another dispatch)
+ * — refusing to cache is always safe, a wrong split is not.
  */
 export function cacheColdPathStore(
   projectRoot: string,
   assembledBody: string,
   cacheKey: PromptCacheKey,
+  liveTaskTail: string,
 ): void {
-  const { skillsSection, taskBlock } = splitAssembledPrompt(assembledBody);
+  const { skillsSection, taskBlock } = splitAssembledPrompt(assembledBody, liveTaskTail);
   if (!taskBlock) return; // boundary missing — refuse to cache.
   try {
     const skillsSectionPath = writeCachedSkillsSection(projectRoot, cacheKey.skillFingerprint, skillsSection);
@@ -930,8 +932,10 @@ export async function handleDispatchSingle(
       skillFingerprint: computeSkillFingerprint(skillResult.paths || []),
       taskKind: 'single' as TaskKind,
     };
-    // splitAssembledPrompt cuts at "\n\nTask:" (the structural anchor), so the
-    // cached skillsSection already ends with the "\n\n---" separator that
+    // This exact string is BOTH the warm-hit splice tail and the suffix
+    // cacheColdPathStore strips off the cold body, so the two paths cannot
+    // disagree about where the boundary is (issue #672). The cached
+    // skillsSection therefore still ends with the "\n\n---" separator that
     // precedes Task: in assemblePrompt's output. liveTaskTail must NOT
     // re-include "\n\n---\n\n" or the warm body grows a duplicate separator
     // per dispatch (caught by dispatch-prompt-cache.test.ts splice integrity).
@@ -963,7 +967,7 @@ export async function handleDispatchSingle(
       // and lessons are task-matched, so caching either risks leaking T1's
       // content into T2 on a warm hit. Cache the plain assembler output.
       if (prompt_format === 'elided') {
-        cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey);
+        cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey, singleLiveTaskTail);
       }
       if (singleLessonBlock) {
         agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock });
@@ -1422,7 +1426,7 @@ export async function handleDispatchParallel(
       };
       agentPrompt = assemblePrompt(parallelParts);
       if (prompt_format === 'elided') {
-        cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey);
+        cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey, parallelLiveTaskTail);
       }
       if (parallelLessonBlock) {
         agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock });
@@ -1800,7 +1804,7 @@ export async function handleDispatchConsensus(
       };
       agentPrompt = assemblePrompt(consensusParts);
       if (prompt_format === 'elided') {
-        cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey);
+        cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey, consensusLiveTaskTail);
       }
       if (consensusLessonBlock) {
         agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock });
