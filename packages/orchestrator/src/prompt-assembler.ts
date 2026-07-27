@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL } from './finding-tag-schema';
+import { sanitizePromptMarkers } from './prompt-markers';
 
 // Re-exported so existing import sites (`@gossip/orchestrator`) keep working.
 export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL };
@@ -289,21 +290,33 @@ export function assemblePrompt(parts: {
   if (parts.memory
       || (parts.consensusFindings && parts.consensusFindings.length > 0)
       || (parts.agentCorrections && parts.agentCorrections.length > 0)) {
+    // Issue #680 — every string below is LLM-authored text read verbatim off
+    // disk (`.gossip/agents/<id>/memory/MEMORY.md`, cognitive knowledge files,
+    // calibration notes, `implementation-findings.jsonl`, lesson cards) and is
+    // therefore untrusted at exactly the same level as skill file content,
+    // which #679 already sanitizes. Three fable-reviewer memory files in this
+    // repo carry a literal `--- END SKILLS ---` today.
+    //
+    // Sanitizing HERE rather than in AgentMemoryReader is deliberate: this is
+    // the single choke point every producer of these three fields flows
+    // through (`dispatch-pipeline.ts:321-326` is currently the only caller, but
+    // the guarantee should not depend on that staying true). It is also
+    // injection-time only — the files on disk are never rewritten.
     const memParts: string[] = [];
-    if (parts.memory) memParts.push(parts.memory);
+    if (parts.memory) memParts.push(sanitizePromptMarkers(parts.memory));
     if (parts.consensusFindings && parts.consensusFindings.length > 0) {
       // Total budget: ~600 chars (3 × 200), injected as a subsection so agents
       // can distinguish these from their own knowledge files.
       const findingsBlock =
         '### Recent Consensus Findings\n' +
-        parts.consensusFindings.map((f, i) => `${i + 1}. ${f}`).join('\n');
+        parts.consensusFindings.map((f, i) => `${i + 1}. ${sanitizePromptMarkers(f)}`).join('\n');
       memParts.push(findingsBlock);
     }
     if (parts.agentCorrections && parts.agentCorrections.length > 0) {
       // Your own prior misses — kept distinct so the agent reads them as personal history.
       memParts.push(
         '### Your Prior Corrections\n' +
-        parts.agentCorrections.map((f, i) => `${i + 1}. ${f}`).join('\n'),
+        parts.agentCorrections.map((f, i) => `${i + 1}. ${sanitizePromptMarkers(f)}`).join('\n'),
       );
     }
     suffix.push({ priority: 3, text: `\n\n--- MEMORY ---\n${memParts.join('\n\n')}\n--- END MEMORY ---` });

@@ -16,6 +16,7 @@ import {
   verifyClaims,
   emitConsensusSignals,
   sanitizeForLog,
+  sanitizePromptMarkers,
   hashPath,
   type ClaimBlock,
   type ClaimVerdict,
@@ -1752,8 +1753,16 @@ export async function handleDispatchConsensus(
     const rawLens = precomputedLenses?.get(def.agent_id);
     // Strip any LENS delimiters the generator may have emitted — assemblePrompt
     // wraps the lens itself so a nested block would produce duplicate markers.
+    //
+    // Issue #680 consolidated the ad-hoc regex that used to live here into the
+    // shared protected-marker list, so a generated lens can no longer forge a
+    // marker for some OTHER block (`--- END SKILLS ---`, `--- MEMORY ---`, …) —
+    // the old pattern only knew about LENS. The replacement stays `''` rather
+    // than the default redaction token because a self-wrapped lens is EXPECTED
+    // generator output on the happy path, not an attack; leaving noise in every
+    // lens would be a legibility regression for zero security gain.
     const lensContent = rawLens
-      ? rawLens.replace(/---\s*(END )?LENS\s*---/gi, '').trim()
+      ? sanitizePromptMarkers(rawLens, '').trim()
       : undefined;
 
     let consensusSkillIndex: ReturnType<typeof ctx.mainAgent.getSkillIndex> | undefined;

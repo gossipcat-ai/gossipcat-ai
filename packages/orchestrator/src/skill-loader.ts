@@ -6,6 +6,7 @@ import { normalizeSkillName } from './skill-name';
 import { gossipLog, log as _log } from './log';
 import { loadMemoryConfig } from './memory-config';
 import { emitPipelineSignals } from './signal-helpers';
+import { sanitizePromptMarkers } from './prompt-markers';
 
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -399,40 +400,16 @@ export function loadSkills(
 
   // Strip delimiter strings from skill content to prevent prompt injection.
   //
-  // Issue #679 — the previous form
-  //   c.replace(/---\s*END SKILLS\s*---/gi, '--- END-SKILLS ---')
-  // had a deterministic bypass. `--- END SKILLS --- END SKILLS ---` contains two
-  // markers that SHARE the middle `---`; the global scan consumed it in match 1
-  // and could not re-match the second, and the replacement itself ENDED in `---`,
-  // re-supplying the dashes the match took. One live terminator survived.
-  //
-  // Two properties fix it, and both are load-bearing:
-  //  1. the replacement emits NO dashes, so it can never re-form a marker nor
-  //     donate leading/trailing dashes to a neighbouring leftover;
-  //  2. the pattern also covers the OPEN marker (`END` is optional, mirroring the
-  //     LENS strip at apps/cli/src/handlers/dispatch.ts:1751), so a forged
-  //     `--- SKILLS ---` cannot open a nested block either.
-  //
-  // Bounds are deliberately tight — no wider than the strings a consumer would
-  // read as a real delimiter (SKILLS_BLOCK_OPEN / SKILLS_BLOCK_CLOSE in
-  // prompt-assembler.ts):
-  //  * `-{3,}` not `-{2,}`: `-- END SKILLS --` is not a delimiter, so rewriting it
-  //    would be over-sanitization. `{3,}` (not exactly 3) is still required —
-  //    `---- END SKILLS ----` DOES contain a live 3-dash marker.
-  //  * `END\s+` not `END[\s_-]*`: `END_SKILLS` / `END-SKILLS` are not delimiters.
-  //    Matching them would also make the pass non-idempotent against its own
-  //    historical output.
-  //  * a bare `---` never matches (SKILLS is required), so YAML frontmatter fences
-  //    and the `\n\n---\n\n` inter-skill separator below are untouched.
-  //
-  // Invariant: for ANY input, the output contains zero substrings matching
-  // /---\s*END SKILLS\s*---/i or /---\s*SKILLS\s*---/i. Holds because every
-  // marker-shaped substring is itself matched by this pattern, and the
-  // replacement text contains no character of the marker alphabet, so no match
-  // can span it. Covered by
-  // tests/orchestrator/skills-delimiter-and-keywords.test.ts.
-  const sanitizeContent = (c: string) =>
-    c.replace(/-{3,}\s*(?:END\s+)?SKILLS\s*-{3,}/gi, '[skill content: delimiter removed]');
+  // Issue #679 fixed a deterministic bypass here (shared middle dashes between
+  // two adjacent markers, plus a replacement that itself ended in `---`).
+  // Issue #680 moved the surviving pattern into prompt-markers.ts, so this path
+  // and the agent-memory / lesson-card / LENS paths all consume ONE marker list
+  // and one set of bounds instead of four hand-maintained regexes. The full
+  // rationale for each bound, and the no-dash-in-replacement invariant, live at
+  // the definition site. Covered by
+  // tests/orchestrator/skills-delimiter-and-keywords.test.ts and
+  // tests/orchestrator/memory-delimiter-sanitization.test.ts.
+  const sanitizeContent = (c: string) => sanitizePromptMarkers(c);
   const sections = [
     ...permanent.map(s => sanitizeContent(s.content)),
     ...scoped.map(s => sanitizeContent(s.content)),
