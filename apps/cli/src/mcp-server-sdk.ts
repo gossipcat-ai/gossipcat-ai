@@ -155,8 +155,8 @@ const __argvShimHandled = (() => {
       '  gossipcat                Start MCP server (for Claude Code / Cursor)\n' +
       '  gossipcat hook --run     Run UserPromptSubmit bootstrap hook (internal)\n' +
       '  gossipcat hook mirror-prompt|mirror-stop|mirror-tool   Activity-mirror hooks (internal; opt-in via gossip_setup mirror_hooks)\n' +
-      '  gossipcat key set <provider>   Store an API key in the OS keychain (service: gossip-mesh)\n' +
-      '  gossipcat key list             Show which providers have a stored key\n' +
+      '  gossipcat key set <provider>   Store an API key (OS keychain when available, else encrypted file)\n' +
+      '  gossipcat key list             Show the resolved store and which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
       '                                 Note: <cwd>/.mcp.json is treated as trusted config (server name is read from it).\n' +
       '  gossipcat help           Show this help\n' +
@@ -178,6 +178,7 @@ const __argvShimHandled = (() => {
       const io = {
         setKey: (p: string, k: string) => kc.setKey(p, k),
         getKey: (p: string) => kc.getKey(p),
+        storeInfo: () => kc.storeInfo(),
         readSecret: () => readSecretFromStdin(),
         out: (l: string) => process.stdout.write(l + '\n'),
         err: (l: string) => process.stderr.write(l + '\n'),

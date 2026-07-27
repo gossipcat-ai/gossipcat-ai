@@ -92,7 +92,7 @@ describe('MainAgent.start() — key_ref + base_url on the MCP-boot path (#522)',
     try { await llm.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
     expect(caught).toBeDefined();
     expect(caught!.message).toContain('no API key configured for agent "ds"');
-    expect(caught!.message).toContain('keychain service "deepseek"');
+    expect(caught!.message).toContain(`run 'gossipcat key set "deepseek"'`);
     // base_url is honored on the boot path (no longer dropped).
     expect(caught!.message).toContain('https://api.deepseek.com/v1');
   });

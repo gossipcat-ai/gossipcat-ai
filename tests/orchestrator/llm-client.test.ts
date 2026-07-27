@@ -685,7 +685,10 @@ describe('LLM Client', () => {
       expect(caught!.message).toContain('no API key configured for agent "deepseek-agent"');
       expect(caught!.message).toContain('provider openai');
       expect(caught!.message).toContain('https://api.deepseek.com/v1');
-      expect(caught!.message).toMatch(/keychain/);
+      // Names the actionable command, NOT a "keychain service" that only exists
+      // on some platforms and is never the provider name anyway (issue #667).
+      expect(caught!.message).toMatch(/run 'gossipcat key set "openai"'/);
+      expect(caught!.message).not.toMatch(/keychain/);
       expect(fetchSpy).not.toHaveBeenCalled();
 
       fetchSpy.mockRestore();
@@ -715,21 +718,21 @@ describe('LLM Client', () => {
       return expect(nullp.generate([{ role: 'user', content: 'hi' }])).resolves.toEqual({ text: '' });
     });
 
-    it('DegradedProvider names the keychain SERVICE from key_ref, not the provider (issue #522)', async () => {
-      // key_ref:"my-custom-key" on an openai agent → message names that service.
+    it('DegradedProvider names the key from key_ref, not the provider (issue #522)', async () => {
+      // key_ref:"my-custom-key" on an openai agent → message names that key.
       const provider = createProviderForAgent('cust', 'openai', 'gpt-4', undefined, 'https://api.example.com/v1', undefined, 'my-custom-key');
       let caught: Error | undefined;
       try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
       expect(caught).toBeDefined();
       expect(caught!.message).toContain('no API key configured for agent "cust"');
-      expect(caught!.message).toContain('keychain service "my-custom-key"');
+      expect(caught!.message).toContain(`run 'gossipcat key set "my-custom-key"'`);
     });
 
     it('DegradedProvider falls back to provider name when key_ref absent', async () => {
       const provider = createProviderForAgent('a6', 'openai', 'gpt-4', undefined);
       let caught: Error | undefined;
       try { await provider.generate([{ role: 'user', content: 'hi' }]); } catch (e) { caught = e as Error; }
-      expect(caught!.message).toContain('keychain service "openai"');
+      expect(caught!.message).toContain(`run 'gossipcat key set "openai"'`);
     });
   });
 
@@ -780,7 +783,7 @@ describe('LLM Client', () => {
       expect(caught).toBeDefined();
       expect(caught!.message).toContain('no API key configured for agent "ds-agent"');
       expect(caught!.message).toContain('provider deepseek');
-      expect(caught!.message).toContain('keychain service "deepseek"');
+      expect(caught!.message).toContain(`run 'gossipcat key set "deepseek"'`);
       expect(fetchSpy).not.toHaveBeenCalled();
       fetchSpy.mockRestore();
     });
@@ -822,14 +825,14 @@ describe('LLM Client', () => {
       fetchSpy.mockRestore();
     });
 
-    it('key missing, no key_ref → DegradedProvider names the provider as the keychain service', async () => {
+    it('key missing, no key_ref → DegradedProvider names the provider as the key name', async () => {
       const getKey = jest.fn().mockResolvedValue(null);
       const provider = await resolveAgentProvider(
         { id: 'a3', provider: 'anthropic', model: 'claude-3' },
         getKey,
       );
       await expect(provider.generate([{ role: 'user', content: 'hi' }]))
-        .rejects.toThrow(/keychain service "anthropic"/);
+        .rejects.toThrow(/gossipcat key set "anthropic"/);
     });
 
     it('base_url threaded: deepseek with custom base_url builds provider without throwing', async () => {

@@ -8,6 +8,9 @@
  */
 
 import { runKeyCommand, KeyCommandIO } from '../../apps/cli/src/key-command';
+import type { KeyStoreInfo, KeyStoreKind } from '../../apps/cli/src/keychain';
+
+const FILE_PATH = '/abs/project/.gossip/keys.enc';
 
 interface FakeIO extends KeyCommandIO {
   store: Map<string, string>;
@@ -19,17 +22,30 @@ interface FakeIO extends KeyCommandIO {
 function makeIO(opts: {
   secret?: string;
   seed?: Record<string, string>;
+  /** Store the CLI resolved to. Defaults to the OS keychain. */
+  storeKind?: KeyStoreKind;
+  /** Store setKey actually wrote to — models the silent keychain→file fallback. */
+  writeDestination?: KeyStoreKind;
 } = {}): FakeIO {
   const store = new Map<string, string>(Object.entries(opts.seed ?? {}));
   const outLines: string[] = [];
   const errLines: string[] = [];
+  const info: KeyStoreInfo = {
+    kind: opts.storeKind ?? 'keychain',
+    service: 'gossip-mesh',
+    path: FILE_PATH,
+  };
   const io: FakeIO = {
     store,
     outLines,
     errLines,
     readSecretCalls: 0,
-    async setKey(provider, key) { store.set(provider, key); },
+    async setKey(provider, key) {
+      store.set(provider, key);
+      return opts.writeDestination ?? info.kind;
+    },
     async getKey(provider) { return store.get(provider) ?? null; },
+    storeInfo() { return info; },
     async readSecret() { io.readSecretCalls++; return opts.secret ?? ''; },
     out(line) { outLines.push(line); },
     err(line) { errLines.push(line); },
@@ -55,6 +71,36 @@ describe('runKeyCommand', () => {
       expect(io.store.get('deepseek')).toBe(secret);
       expect(io.outLines.join('\n')).toContain('deepseek');
       assertNoLeak(io, secret);
+    });
+
+    it('names the keychain store and its service on a keychain write (issue #667)', async () => {
+      const io = makeIO({ secret: 'sk-abc', storeKind: 'keychain' });
+      const code = await runKeyCommand(['set', 'google'], io);
+
+      expect(code).toBe(0);
+      expect(io.outLines.join('\n')).toBe(
+        'stored key for "google" in keychain (service gossip-mesh)',
+      );
+    });
+
+    it('names the file store and its ABSOLUTE path on a file write (issue #667)', async () => {
+      const io = makeIO({ secret: 'sk-abc', storeKind: 'file' });
+      const code = await runKeyCommand(['set', 'google'], io);
+
+      expect(code).toBe(0);
+      expect(io.outLines.join('\n')).toBe(`stored key for "google" in file ${FILE_PATH}`);
+    });
+
+    it('reports the FALLBACK destination when a keychain write drops to file (issue #667)', async () => {
+      // storeInfo() still says "keychain" (it is available) but the write threw
+      // and fell back — the confirmation must follow the write, not the store.
+      const io = makeIO({ secret: 'sk-abc', storeKind: 'keychain', writeDestination: 'file' });
+      const code = await runKeyCommand(['set', 'google'], io);
+
+      expect(code).toBe(0);
+      const out = io.outLines.join('\n');
+      expect(out).toBe(`stored key for "google" in file ${FILE_PATH}`);
+      expect(out).not.toContain('keychain');
     });
 
     it('returns 2 and does not store when the secret is empty/whitespace', async () => {
@@ -98,6 +144,24 @@ describe('runKeyCommand', () => {
       expect(out).toMatch(/✓\s+deepseek/);
       expect(out).toMatch(/·\s+openai/);
       assertNoLeak(io, secret);
+    });
+
+    it('leads with the keychain store and service (issue #667)', async () => {
+      const io = makeIO({ storeKind: 'keychain' });
+      const code = await runKeyCommand(['list'], io);
+
+      expect(code).toBe(0);
+      expect(io.outLines[0]).toBe('(store: keychain  service gossip-mesh)');
+    });
+
+    it('leads with the file store and its ABSOLUTE path (issue #667)', async () => {
+      const io = makeIO({ storeKind: 'file' });
+      const code = await runKeyCommand(['list'], io);
+
+      expect(code).toBe(0);
+      expect(io.outLines[0]).toBe(`(store: file  ${FILE_PATH})`);
+      // Absolute, so a relay-vs-CLI cwd mismatch is visible.
+      expect(io.outLines[0]).toContain('/');
     });
   });
 

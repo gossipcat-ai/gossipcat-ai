@@ -1,6 +1,6 @@
 import { Keychain } from '../../apps/cli/src/keychain';
 import { existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 
 const ENCRYPTED_FILE = join(process.cwd(), '.gossip/keys.enc');
 
@@ -83,6 +83,48 @@ describe('Keychain', () => {
     await keychain.setKey('provider-x', 'old-key');
     await keychain.setKey('provider-x', 'new-key');
     expect(await keychain.getKey('provider-x')).toBe('new-key');
+  });
+
+  it('storeInfo reports the service and an ABSOLUTE encrypted-file path (issue #667)', () => {
+    const info = new Keychain(TEST_SERVICE).storeInfo();
+    expect(info.service).toBe(TEST_SERVICE);
+    expect(info.path).toBe(ENCRYPTED_FILE);
+    expect(isAbsolute(info.path)).toBe(true);
+    expect(['keychain', 'file']).toContain(info.kind);
+  });
+
+  it('setKey reports the store the key actually landed in (issue #667)', async () => {
+    const kc = new Keychain(TEST_SERVICE);
+    const dest = await kc.setKey('test-provider', 'test-key-123');
+
+    if (kc.storeInfo().kind === 'file') {
+      expect(dest).toBe('file'); // no OS keychain — the file is the only store
+    } else {
+      expect(['keychain', 'file']).toContain(dest); // a keychain write may fall back
+    }
+    if (dest === 'file') expect(existsSync(ENCRYPTED_FILE)).toBe(true);
+  });
+
+  it('setKey returns "file" when an available keychain write fails and falls back (issue #667)', async () => {
+    const hasKeychainBackend = process.platform === 'darwin' || process.platform === 'linux';
+    if (!hasKeychainBackend) return; // no keychain to fall back FROM
+
+    const cp = require('child_process');
+    const spy = jest.spyOn(cp, 'execFileSync').mockImplementation((...callArgs: unknown[]) => {
+      const argv = (callArgs[1] as string[]) ?? [];
+      // Availability probe (`security help` / `which secret-tool`) succeeds…
+      if (argv[0] === 'help' || argv[0] === 'secret-tool') return Buffer.from('');
+      throw new Error('keychain write refused'); // …but every write is refused.
+    });
+
+    try {
+      const kc = new Keychain(TEST_SERVICE);
+      expect(kc.storeInfo().kind).toBe('keychain');
+      expect(await kc.setKey('test-provider', 'test-key-123')).toBe('file');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(existsSync(ENCRYPTED_FILE)).toBe(true);
   });
 
   it('handles corrupted encrypted file gracefully', async () => {
