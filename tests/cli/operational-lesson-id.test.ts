@@ -20,6 +20,7 @@ import {
   parseOperationalFindingId,
   validateOperationalLessonSignal,
   isOperationalLessonSignal,
+  acceptsSessionScopedFindingId,
   FINDING_ID_FORMS_HELP,
   OPERATIONAL_LESSON_SIGNAL,
 } from '../../apps/cli/src/handlers/operational-lesson-id';
@@ -37,6 +38,13 @@ function gate(s: { signal: string; agent_id: string; finding_id?: string; lesson
   const opErr = validateOperationalLessonSignal(s);
   if (opErr) return opErr;
   if (isOperationalLessonSignal(s.signal)) return null;
+  // Issue #678 — `design_split` may use either grammar; skip the consensus
+  // prefix check only when it actually used the session form.
+  if (
+    s.finding_id !== undefined &&
+    acceptsSessionScopedFindingId(s.signal) &&
+    parseOperationalFindingId(s.finding_id).kind === 'valid'
+  ) return null;
   if (s.finding_id !== undefined && !FINDING_ID_PREFIX.test(s.finding_id)) {
     return `Error: malformed finding_id "${s.finding_id}" (agent: ${s.agent_id}). ${FINDING_ID_FORMS_HELP} See CLAUDE.md signal contract.`;
   }
@@ -88,7 +96,8 @@ describe('consensus finding_id — unchanged primary contract', () => {
   it('rejects the session-scoped form on a NON-operational signal', () => {
     const err = gate({ signal: 'agreement', agent_id: 'a', finding_id: 'session:s1:lesson' });
     expect(err).not.toBeNull();
-    expect(err).toContain('only valid for signal "operational_lesson"');
+    // Issue #678 widened this to the two signals that accept the session form.
+    expect(err).toContain('only valid for signals "operational_lesson" and "design_split"');
   });
 });
 
@@ -232,12 +241,14 @@ describe('gossip_signals handler wiring', () => {
     const posIdx = src.indexOf('else if (POSITIVE_SIGNALS.has(s.signal)) entry.pos++;');
     expect(lessonIdx).toBeGreaterThan(-1);
     expect(posIdx).toBeGreaterThan(lessonIdx);
-    expect(src).toContain('lesson${lessons === 1 ? \'\' : \'s\'}, unscored)');
+    // Issue #678 moved the trailing ")" out of this template — the note list is
+    // now joined so `design_split` can add a second parenthetical clause.
+    expect(src).toContain('lesson${lessons === 1 ? \'\' : \'s\'}, unscored');
   });
 
   it('does not claim dispatch-weight impact for an all-lessons batch', () => {
-    expect(src).toContain('const scoringCount = deduped.filter(s => !isOperationalLessonSignal(s.signal)).length;');
-    expect(src).toContain('operational lessons never influence dispatch weighting.');
+    expect(src).toContain('!isOperationalLessonSignal(s.signal) && !isDesignSplitSignal(s.signal),');
+    expect(src).toContain('operational lessons and design splits never influence dispatch weighting.');
     // The unconditional claim must be gone — it is now behind scoringCount > 0.
     expect(src).not.toContain('${taskIdList}\\n\\nThese will influence future agent selection');
   });

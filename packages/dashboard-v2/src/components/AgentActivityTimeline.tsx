@@ -25,6 +25,10 @@ const SIGNAL_TAG_CLS: Record<string, string> = {
   disagreement: 'text-disputed bg-disputed/10',
   hallucination_caught: 'text-disputed bg-disputed/10',
   unverified: 'text-unverified bg-unverified/10',
+  // Issue #678 — unresolved design split. `unverified` classes resolve to
+  // --color-unverified, which globals.css unifies with --info teal, so this is
+  // the informational token, deliberately not the rose `disputed` one.
+  design_split: 'text-unverified bg-unverified/10',
 };
 
 export function AgentActivityTimeline({ agentId }: Props) {

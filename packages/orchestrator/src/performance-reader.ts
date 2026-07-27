@@ -343,7 +343,29 @@ const KNOWN_SIGNALS: Record<ConsensusSignal['signal'], true> = {
   // no-op. "Score preconditions, not decisions": an operator recording their
   // own process mistake must never dent an agent's accuracy.
   operational_lesson: true,
+  // Unresolved design disagreement between two agents (issue #678). Same
+  // treatment as `operational_lesson` for the same reason: a defensible
+  // trade-off that reading code cannot settle is a decision-space observation,
+  // not a correctness failure by either side.
+  design_split: true,
 };
+
+/**
+ * Consensus-shaped signals that must contribute NOTHING to any score —
+ * dropped from `consensusSignals` before the first scoring pass, not merely
+ * given a no-op switch arm (see the comment at the filter site for why the
+ * distinction matters).
+ *
+ * Both members are operator-recorded rather than pipeline-derived, and both are
+ * registered in `OPERATIONAL_SIGNAL_NAMES`. They stay a distinct set here
+ * because that classifier also covers auto-fired rows (`transport_failure`,
+ * `task_timeout`) which DO need to reach the switch — the ones below must not
+ * reach it at all.
+ */
+const SCORING_EXEMPT_SIGNALS: ReadonlySet<ConsensusSignal['signal']> = new Set([
+  'operational_lesson',
+  'design_split',
+]);
 
 const SEVERITY_MULTIPLIER: Record<string, number> = {
   critical: 4,
@@ -918,8 +940,9 @@ export class PerformanceReader {
     // consensusSignals → scoring + streak building.
     // implSignals      → streak building only (scoring is handled separately by getImplScore).
     //
-    // `operational_lesson` (issue #668) is dropped HERE, before any other pass
-    // sees it. A no-op switch arm further down is NOT sufficient: the loops
+    // `SCORING_EXEMPT_SIGNALS` — `operational_lesson` (issue #668) and
+    // `design_split` (issue #678) — are dropped HERE, before any other pass
+    // sees them. A no-op switch arm further down is NOT sufficient: the loops
     // between here and there have side effects that a merely-unscored signal
     // would still trigger —
     //   1. the task-order index at :888 would advance `taskCounter`, shifting
@@ -929,9 +952,13 @@ export class PerformanceReader {
     //      signal as a streak-breaker, so recording a process lesson would
     //      REHABILITATE an agent sitting on 3 consecutive hallucinations.
     // Both are score movement, and "score preconditions, not decisions" means
-    // an operator logging their own mistake must move nothing at all.
+    // neither an operator logging their own mistake NOR a recorded design split
+    // may move anything at all — in either direction, for either side. Note
+    // `design_split` also names a `counterpartId`, which the task-order index
+    // indexes too, so a switch-arm-only exemption would move the counterpart's
+    // decay as well as the subject's.
     const consensusSignals = signals.filter(
-      (s): s is ConsensusSignal => s.type === 'consensus' && s.signal !== 'operational_lesson',
+      (s): s is ConsensusSignal => s.type === 'consensus' && !SCORING_EXEMPT_SIGNALS.has(s.signal),
     );
     const implSignals = signals.filter((s): s is ImplSignal => s.type === 'impl');
 
@@ -1284,10 +1311,12 @@ export class PerformanceReader {
         case 'auto_verify_skipped_misconfigured':
           break;
         case 'operational_lesson':
-          // Unreachable: filtered out of `consensusSignals` at the split above,
-          // because a no-op arm here would still be too late (see the comment
-          // there). This arm exists only to satisfy the exhaustiveness check
-          // below, and to fail loudly in review if the filter is ever removed.
+        case 'design_split':
+          // Unreachable: both are in `SCORING_EXEMPT_SIGNALS` and filtered out
+          // of `consensusSignals` at the split above, because a no-op arm here
+          // would still be too late (see the comment there). These arms exist
+          // only to satisfy the exhaustiveness check below, and to fail loudly
+          // in review if the filter is ever removed.
           break;
         default: {
           // Exhaustiveness: any new ConsensusSignal['signal'] member added to

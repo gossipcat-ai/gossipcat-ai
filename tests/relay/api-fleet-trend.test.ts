@@ -55,4 +55,44 @@ describe('fleetTrendHandler', () => {
     expect(res.points.some(p => p.agentId === '_system')).toBe(false);
     expect(res.points.some(p => p.agentId === 'alice')).toBe(true);
   });
+
+  // Issue #678. `total` here is the accuracy DENOMINATOR, and an operational
+  // row can never increment `good` — so leaving it in silently drags the
+  // plotted accuracy down. For `design_split` that means both named agents
+  // visibly lose accuracy for holding a defensible position, which is the
+  // outcome the signal exists to prevent.
+  it('excludes operational-class rows from the accuracy denominator', async () => {
+    const now = new Date().toISOString();
+    const root = makeRoot([
+      { type: 'consensus', signal: 'agreement', agentId: 'alice', timestamp: now },
+      {
+        type: 'consensus', signal: 'design_split', agentId: 'alice',
+        counterpartId: 'bob', signal_class: 'operational', timestamp: now,
+      },
+      {
+        type: 'consensus', signal: 'operational_lesson', agentId: 'alice',
+        signal_class: 'operational', timestamp: now,
+      },
+    ]);
+    const res = await fleetTrendHandler(root);
+    const alice = res.points.find(p => p.agentId === 'alice');
+    expect(alice).toBeDefined();
+    expect(alice!.signals).toBe(1);
+    expect(alice!.accuracy).toBe(1);
+  });
+
+  it('still counts a real (performance-class) verdict against accuracy', async () => {
+    const now = new Date().toISOString();
+    const root = makeRoot([
+      { type: 'consensus', signal: 'agreement', agentId: 'alice', timestamp: now },
+      {
+        type: 'consensus', signal: 'disagreement', agentId: 'alice',
+        signal_class: 'performance', category: 'trust_boundaries', timestamp: now,
+      },
+    ]);
+    const res = await fleetTrendHandler(root);
+    const alice = res.points.find(p => p.agentId === 'alice');
+    expect(alice!.signals).toBe(2);
+    expect(alice!.accuracy).toBe(0.5);
+  });
 });
