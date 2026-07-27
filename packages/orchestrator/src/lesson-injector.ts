@@ -35,6 +35,7 @@ import {
   clearsLessonFloor,
   type ScorableCard,
 } from './lesson-scoring';
+import { sanitizePromptMarkers } from './prompt-markers';
 
 /** Shared cross-cutting lesson home (mirrors memory-writer.PROJECT_LESSON_AGENT_ID). */
 const PROJECT_LESSON_AGENT_ID = '_project';
@@ -128,7 +129,16 @@ const LESSON_SOURCE_ATTR_MAX = 120;
 /** An agent id is a `SAFE_NAME` (≤63 chars), plus slack. */
 const LESSON_SURFACE_ATTR_MAX = 64;
 
-/** Residual defence: neutralise a forged block terminator inside a card body. */
+/**
+ * Residual defence: neutralise a forged OWN-block terminator inside a card body.
+ *
+ * Kept alongside the shared `sanitizePromptMarkers` pass (issue #680) rather
+ * than folded into it, because its bound is deliberately WIDER: `-{2,}`, not
+ * `-{3,}`. This block's own terminator is the one a card is most likely to
+ * forge, so a 2-dash near-miss is worth mangling here even though it is not a
+ * live delimiter anywhere else. Narrowing this to `-{3,}` to "unify" it would
+ * be a regression.
+ */
 const FORGED_BLOCK_MARKER = /-{2,}\s*(?:END\s+)?RECALLED\s+LESSONS\s*-{2,}/gi;
 
 export interface SelectedLesson {
@@ -253,9 +263,17 @@ function scanKnowledgeDir(projectRoot: string, surface: string, cutoffMs: number
     // Body: prompt-injection delimiters stripped (mirror of
     // AgentMemoryReader.loadMemory), forged block terminators neutralised, then
     // collapsed to a single line so no card content can present as structure.
-    const body = rawBody
-      .replace(/<\/?(?:agent-memory|system|instructions)>/gi, '')
-      .replace(FORGED_BLOCK_MARKER, '[marker removed]')
+    //
+    // Issue #680: lesson cards are LLM-authored memory files, and the rendered
+    // block is handed to `assemblePrompt({ retrievedLessons })` VERBATIM (it
+    // carries its own delimiters), so it bypasses the assembler's memory-side
+    // sanitization. It must scrub every protected marker itself, not just its
+    // own terminator.
+    const body = sanitizePromptMarkers(
+      rawBody
+        .replace(/<\/?(?:agent-memory|system|instructions)>/gi, '')
+        .replace(FORGED_BLOCK_MARKER, '[marker removed]'),
+    )
       .replace(/\s+/g, ' ')
       .trim();
     if (!body) continue;

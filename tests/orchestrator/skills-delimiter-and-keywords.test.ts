@@ -172,7 +172,10 @@ describe('#677/#679 — skill content cannot break out of the block (trust bound
       expect(countOpen(result.content)).toBe(0);
       // The sanitizer's replacement must not itself contain dashes — a
       // dash-bearing replacement is what re-formed a marker in the old code.
-      const replaced = result.content.match(/\[skill content:[^\]]*\]/g) || [];
+      // Token changed from `[skill content: …]` to `[content: …]` in #680 when
+      // the sanitizer moved to the shared prompt-markers module; the property
+      // under test (no dashes in the replacement) is unchanged.
+      const replaced = result.content.match(/\[content:[^\]]*\]/g) || [];
       expect(replaced.length).toBeGreaterThanOrEqual(6);
       for (const r of replaced) expect(r).not.toContain('-');
 
@@ -234,7 +237,7 @@ describe('#677/#679 — skill content cannot break out of the block (trust bound
     ].join('\n');
     const { result, cleanup } = loadEvilSkill(benign);
     try {
-      expect(result.content).not.toContain('[skill content:');
+      expect(result.content).not.toContain('[content:');
       expect(result.content).toContain('name: benign');
       expect(result.content).toContain('-- END SKILLS --');
       expect(result.content).toContain('--- SKILL --- singular');
