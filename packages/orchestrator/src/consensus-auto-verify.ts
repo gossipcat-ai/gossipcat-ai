@@ -154,6 +154,11 @@ function buildAttemptSignal(args: {
 }): ConsensusSignal {
   return {
     type: 'consensus',
+    // Telemetry, never a scoring verdict. Stamped explicitly for symmetry with
+    // the `consensus_coverage_degraded` sibling (consensus-engine.ts) so the
+    // row-level `isOperationalClassRow` surfaces see the class without having
+    // to re-derive it from the signal name.
+    signal_class: 'operational',
     signal: 'auto_verify_attempted',
     taskId: `${args.utilityTaskIdSeed}:auto-verify:${args.finding.id}`,
     consensusId: args.consensusId,
@@ -178,6 +183,8 @@ export function buildSkipSignal(args: {
 }): ConsensusSignal {
   return {
     type: 'consensus',
+    /** Telemetry — see `buildAttemptSignal` for why this is stamped explicitly. */
+    signal_class: 'operational',
     signal: 'auto_verify_skipped_misconfigured',
     taskId: `${args.utilityTaskIdSeed}:auto-verify:skip`,
     consensusId: args.consensusId,
