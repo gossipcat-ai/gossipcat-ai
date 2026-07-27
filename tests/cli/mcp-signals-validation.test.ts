@@ -13,7 +13,7 @@
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { PerformanceWriter, SkillGapTracker, DEFAULT_KEYWORDS } from '@gossip/orchestrator';
+import { PerformanceWriter, SkillGapTracker, DEFAULT_KEYWORDS, keywordStem } from '@gossip/orchestrator';
 // Test-exemption: WRITER_INTERNAL gates appendSignal(s) access. Tests use it directly
 // to exercise validation/rejection behavior that helpers swallow via try/catch.
 // This import is outside the Step 4 parity-test scan scope (tests/ not scanned).
@@ -47,7 +47,9 @@ function runGapPipeline(
   let bestCategory = '';
   let bestHits = 0;
   for (const [category, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
-    const hits = keywords.filter(kw => text.includes(kw)).length;
+    // Mirrors the production matcher: keywordStem strips the #681 trailing-`*`
+    // stem marker before substring matching.
+    const hits = keywords.filter(kw => text.includes(keywordStem(kw))).length;
     if (hits > bestHits) {
       bestHits = hits;
       bestCategory = category;
@@ -540,7 +542,7 @@ function bulkInferCategory(text: string): string | undefined {
   let bestCategory = '';
   let bestHits = 0;
   for (const [category, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
-    const hits = (keywords as string[]).filter(kw => text.includes(kw)).length;
+    const hits = (keywords as string[]).filter(kw => text.includes(keywordStem(kw))).length;
     if (hits > bestHits) { bestHits = hits; bestCategory = category; }
   }
   return bestHits >= 1 ? bestCategory : undefined;

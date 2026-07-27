@@ -2,7 +2,7 @@ export { MainAgent } from './main-agent';
 export { seedMemoryHygiene } from './memory-hygiene-seed';
 export type { MemoryHygieneSeedResult } from './memory-hygiene-seed';
 export { detectFormatCompliance, MAX_COMPLIANCE_INPUT } from './dispatch-pipeline';
-export { loadSkills, resolveEffectiveSkills, DEFAULT_KEYWORDS, resolveSkillExists, resolveSkill } from './skill-loader';
+export { loadSkills, resolveEffectiveSkills, DEFAULT_KEYWORDS, keywordStem, resolveSkillExists, resolveSkill } from './skill-loader';
 export type { LoadSkillsResult, DroppedSkill } from './skill-loader';
 export { crossReviewSkillGateSeverity, shouldInjectCrossReviewSkills, createAgentSkillsContentResolver } from './cross-review-skills';
 export type { CrossReviewSkillGateSeverity, SeverityBearingFinding, AgentSkillsContentResolverConfig } from './cross-review-skills';
