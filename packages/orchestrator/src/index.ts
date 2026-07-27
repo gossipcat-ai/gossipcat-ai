@@ -143,7 +143,7 @@ export type { HookInstallResult, DisciplineHookInstallResult, BootstrapHookInsta
 export { OverlapDetector } from './overlap-detector';
 export { LensGenerator } from './lens-generator';
 export { PerformanceWriter, rotateJsonlIfNeeded, MAX_TELEMETRY_BYTES } from './performance-writer';
-export { PerformanceReader, readJsonlWithRotated } from './performance-reader';
+export { PerformanceReader, readJsonlWithRotated, isOperationalClassRow } from './performance-reader';
 export {
   loadOrRebuildAggregateIndex,
   rebuildAggregateIndex,
