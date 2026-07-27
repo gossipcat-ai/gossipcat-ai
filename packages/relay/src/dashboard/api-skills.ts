@@ -1,5 +1,5 @@
 import { SkillIndex, SkillIndexData } from '@gossip/orchestrator/skill-index';
-import { readJsonlWithRotated, normalizeSkillName, resolveSkill } from '@gossip/orchestrator';
+import { readJsonlWithRotated, normalizeSkillName, resolveSkill, isOperationalClassRow } from '@gossip/orchestrator';
 import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import type { SkillVerdict, SkillCurvePoint, SkillEffectivenessEntry } from '@gossip/types';
@@ -164,6 +164,9 @@ function buildSignalIndex(projectRoot: string): SignalIndex {
     const signal = r.signal as string | undefined;
     if (!signal) continue;
     if (!CORRECT_SIGNALS.has(signal) && !HALLUC_SIGNALS.has(signal)) continue;
+    // Operational-class rows are telemetry — never skill-effectiveness counters.
+    // Same shared exclusion the orchestrator's accuracy surfaces apply.
+    if (isOperationalClassRow(r)) continue;
     const agentId = r.agentId as string | undefined;
     const category = r.category as string | undefined;
     const tsStr = r.timestamp as string | undefined;

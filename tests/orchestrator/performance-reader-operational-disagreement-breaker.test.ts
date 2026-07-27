@@ -14,6 +14,14 @@
  *   - real (categorized) negatives still do;
  *   - an operational row does NOT rehabilitate an already-open streak —
  *     it is treated as absent, exactly like `transport_failure`.
+ *
+ * Follow-up (consensus c2fb69d4-6a714a73, stacks on 7b5528b2) pins the two axes
+ * the original suite left unmeasured:
+ *   - the `signal_class: 'operational'` axis on its own (a stamped row WITH a
+ *     category is still excluded — mutating that clause away used to pass);
+ *   - the `signal_class: 'performance'` axis on its own (a synthesis-stamped row
+ *     WITHOUT a category is a real verdict: it feeds the breaker, but stays out
+ *     of the accuracy arm because it cannot be category-bucketed).
  */
 
 import { PerformanceReader } from '../../packages/orchestrator/src/performance-reader';
@@ -59,6 +67,45 @@ function operationalDisagreement(taskId: string, timestamp: string): any {
     taskId,
     agentId: AGENT,
     evidence: 'Task failed: Context window exceeded',
+    timestamp,
+  };
+}
+
+/**
+ * An operational disagreement that DOES carry a category — e.g. a collect.ts
+ * failure row whose evidence happened to resolve to a category. The explicit
+ * stamp is authoritative: still telemetry, still excluded everywhere.
+ */
+function categorizedOperationalDisagreement(taskId: string, timestamp: string): any {
+  return {
+    type: 'consensus',
+    signal: 'disagreement',
+    signal_class: 'operational',
+    taskId,
+    agentId: AGENT,
+    counterpartId: 'gemini-reviewer',
+    category: 'testing',
+    severity: 'medium',
+    evidence: 'Task failed: model unavailable',
+    timestamp,
+  };
+}
+
+/**
+ * A consensus-synthesis disagreement whose category resolution failed — a REAL
+ * finding-evaluation verdict carrying the `performance` stamp but no category.
+ * consensus-engine.ts stamps every synthesis push this way.
+ */
+function uncategorizedPerformanceDisagreement(taskId: string, timestamp: string): any {
+  return {
+    type: 'consensus',
+    signal: 'disagreement',
+    signal_class: 'performance',
+    taskId,
+    agentId: AGENT,
+    counterpartId: 'gemini-reviewer',
+    severity: 'medium',
+    evidence: 'peer disproved the finding; category resolution failed',
     timestamp,
   };
 }
@@ -179,5 +226,55 @@ describe('PerformanceReader — operational disagreements and the circuit breake
     const score = scoreFor();
     expect(score.consecutiveFailures).toBe(0);
     expect(score.circuitOpen).toBe(false);
+  });
+
+  it('excludes an operational-stamped disagreement even when it carries a category', () => {
+    // Pins the `signal_class === 'operational'` axis in isolation: with a
+    // category present, the category-absence heuristic cannot do the work, so
+    // only the stamp keeps these rows out of the breaker and the accuracy arm.
+    writeSignals([
+      positive('t-0', ts(0)),
+      positive('t-1', ts(1)),
+      positive('t-2', ts(2)),
+      categorizedOperationalDisagreement('t-3', ts(3)),
+      categorizedOperationalDisagreement('t-4', ts(4)),
+      categorizedOperationalDisagreement('t-5', ts(5)),
+    ]);
+
+    const score = scoreFor();
+    expect(score.consecutiveFailures).toBe(0);
+    expect(score.circuitOpen).toBe(false);
+    // Accuracy arm untouched: scoringSignals increments in lockstep with
+    // weightedTotal for disagreement rows, so only the three positives count.
+    expect(score.scoringSignals).toBe(3);
+    expect(score.disagreements).toBe(0);
+    expect(score.categoryHallucinated.testing).toBeUndefined();
+    expect(dispatchWeightFor()).toBeGreaterThan(0.3);
+  });
+
+  it('opens the breaker on performance-stamped disagreements that failed category resolution', () => {
+    // The regression this follow-up repairs: consensus synthesis records real
+    // verdicts with an undefined category whenever review vocabulary matches no
+    // CATEGORY_PATTERNS entry. Pre-stamp, the category-absence heuristic read
+    // those as dispatch failures and the breaker skipped them entirely.
+    writeSignals([
+      positive('t-0', ts(0)),
+      positive('t-1', ts(1)),
+      positive('t-2', ts(2)),
+      uncategorizedPerformanceDisagreement('t-3', ts(3)),
+      uncategorizedPerformanceDisagreement('t-4', ts(4)),
+      uncategorizedPerformanceDisagreement('t-5', ts(5)),
+    ]);
+
+    const score = scoreFor();
+    expect(score.consecutiveFailures).toBe(3);
+    expect(score.circuitOpen).toBe(true);
+    expect(dispatchWeightFor()).toBe(0.3);
+    // ...while the accuracy arm still skips them — an uncategorized row cannot
+    // be category-bucketed, so weightedTotal/disagreements stay untouched
+    // (PR 4 Part B contract). Only the three positives are scoring signals.
+    expect(score.scoringSignals).toBe(3);
+    expect(score.disagreements).toBe(0);
+    expect(Object.keys(score.categoryHallucinated)).toHaveLength(0);
   });
 });

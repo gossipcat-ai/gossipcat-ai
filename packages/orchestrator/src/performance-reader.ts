@@ -230,37 +230,76 @@ const NEGATIVE_IMPL_SIGNALS = new Set(['impl_test_fail', 'impl_peer_rejected']);
 const SIGNAL_EXPIRY_DAYS = 30;
 
 /**
+ * Explicit operational-class stamp test — the ONE shared exclusion used by every
+ * accuracy-counting surface (`getCountersSince`'s raw fallback, the signal
+ * aggregate index rebuild, and the dashboard skill-effectiveness index).
+ *
+ * Per docs/HANDBOOK.md invariant #14 an operational-class row is telemetry: it
+ * describes a transport / lifecycle event, not a finding-evaluation verdict, and
+ * must never move a score. Kept deliberately narrow — it tests only the explicit
+ * stamp, so callers that also need the legacy category-absence heuristic
+ * (the circuit breaker) layer it on top rather than duplicating this check.
+ *
+ * Accepts a loose row shape so untyped JSONL readers (packages/relay's
+ * dashboard/api-skills.ts) can call it without casting.
+ */
+export function isOperationalClassRow(row: { signal_class?: unknown }): boolean {
+  return row.signal_class === 'operational';
+}
+
+/**
  * Operational-class `disagreement` predicate — the single source of truth shared
  * by the accuracy loop and the circuit-breaker streak builder so the two cannot
  * drift apart.
  *
  * A failed dispatch (quota exhaustion, context overflow, model unavailable) is
  * auto-recorded as a `disagreement` by apps/cli/src/handlers/collect.ts, carrying
- * `signal_class: 'operational'` and NO `category` — it describes a transport /
- * lifecycle failure, not a finding-evaluation verdict. Per docs/HANDBOOK.md
- * invariant #14 these rows are telemetry and must never move a score: excluded
- * from accuracy arithmetic AND from the circuit-breaker streak.
+ * `signal_class: 'operational'` and NO `category` — telemetry, excluded from
+ * accuracy arithmetic AND from the circuit-breaker streak.
  *
- * The category-absence test is load-bearing (it matches the accuracy loop's
- * established semantics and covers historical rows written before `signal_class`
- * stamping existed); the `signal_class` test is a belt-and-braces second axis.
+ * The stamp is authoritative in BOTH directions. Consensus synthesis stamps every
+ * scoring-class signal `signal_class: 'performance'`, and category resolution is
+ * allowed to fail there (review vocabulary that matches no CATEGORY_PATTERNS entry
+ * is a logged, expected condition) — so an uncategorized `performance` row is a
+ * REAL verdict and must still feed the breaker. Only unstamped legacy rows fall
+ * back to the category-absence heuristic.
+ *
+ * Behavior matrix (see also `isScoringDisagreement`):
+ *
+ *   signal_class   category   circuit breaker   accuracy arm
+ *   -----------    --------   ---------------   ------------
+ *   operational    any        excluded          excluded
+ *   performance    present    counted           scored
+ *   performance    absent     counted           skipped (cannot be bucketed)
+ *   (none)         absent     excluded          excluded   ← legacy operational
+ *   (none)         present    counted           scored     ← legacy verdict
  */
 function isOperationalDisagreement(signal: ConsensusSignal): boolean {
   if (signal.signal !== 'disagreement') return false;
-  return !signal.category || signal.signal_class === 'operational';
+  if (isOperationalClassRow(signal)) return true;
+  return !signal.signal_class && !signal.category;
 }
 
 /** A `disagreement` row that participates in scoring — always carries a category. */
 type ScoringDisagreement = ConsensusSignal & { signal: 'disagreement'; category: string };
 
 /**
- * Exact inverse of `isOperationalDisagreement` for `disagreement` rows, as a
- * type predicate so the accuracy arm can index `categoryHallucinated` without a
- * non-null assertion. Defined in terms of the shared predicate — it cannot
- * disagree with it.
+ * The accuracy arm's admission test for `disagreement` rows, as a type predicate
+ * so the arm can index `categoryHallucinated` without a non-null assertion.
+ *
+ * Stricter than `!isOperationalDisagreement` by exactly one axis: a truthy
+ * `category`. A `performance`-stamped uncategorized row is a real verdict (the
+ * breaker counts it) but cannot be category-bucketed, so the accuracy arm keeps
+ * skipping it — preserving the PR 4 Part B contract that uncategorized rows never
+ * touch weightedTotal/disagreements/categoryHallucinated.
  */
 function isScoringDisagreement(signal: ConsensusSignal): signal is ScoringDisagreement {
-  return signal.signal === 'disagreement' && !isOperationalDisagreement(signal);
+  return (
+    signal.signal === 'disagreement' &&
+    !isOperationalDisagreement(signal) &&
+    typeof signal.category === 'string' &&
+    signal.category.length > 0
+  );
 }
 
 /** Known consensus signal types — used to filter valid signals in computeScores */
@@ -704,6 +743,10 @@ export class PerformanceReader {
       // categoryStrengths/categoryHallucinated) — an empty-string category
       // should never satisfy a category-specific counter query.
       if (!s.category) continue;
+      // Operational-class rows are telemetry — never accuracy counters. Shares
+      // `isOperationalClassRow` with the aggregate-index rebuild and the
+      // dashboard skill index so the three surfaces cannot drift.
+      if (isOperationalClassRow(s)) continue;
       if (normalizeSkillName(s.category) !== normalizedTarget) continue;
       const ts = s.timestamp ? new Date(s.timestamp).getTime() : 0;
       if (!isFinite(ts) || ts === 0 || ts < sinceMs) continue;
