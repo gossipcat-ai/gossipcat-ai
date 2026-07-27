@@ -94,6 +94,7 @@ export type { LessonRelevance, ScorableCard } from './lesson-scoring';
 export { LESSON_STOPWORDS } from './lesson-stopwords';
 export { MemoryWriter, writeLessonCardsForSignals, lessonCardSlug, TERMINAL_LESSON_SIGNALS, OPERATIONAL_LESSON_SIGNALS, PROJECT_LESSON_AGENT_ID, LESSON_CARDS_MAX_PER_AGENT, LESSON_ID_SEPARATOR } from './memory-writer';
 export type { SessionArtifacts } from './memory-writer';
+export { mergeNextSessionLedger, extractLedgerBullets, bulletsMatch, isShippedPerGitLog, NEXT_SESSION_MAX_BULLETS } from './next-session-merge';
 export { refreshMemoryIndex, applyStatusTags } from './memory-index';
 export type { RefreshResult, MemoryStatus } from './memory-index';
 export {
