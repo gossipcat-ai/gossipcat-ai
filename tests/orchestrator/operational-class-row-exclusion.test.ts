@@ -24,14 +24,22 @@
 // HOW WE KNOW EACH TEST FAILS IF ITS GUARD LINE IS DELETED (no source mutation
 // was performed — this is the mutation-equivalence argument):
 //
-//   1. The operational fixture row and its positive control differ in EXACTLY
-//      one field: `signal_class`. Every other axis the filters read (type,
-//      signal, agentId, taskId, category, timestamp, retraction keys) is
+//   1. The operational fixture row and its positive control differ in exactly
+//      one field that any filter READS as a discriminator: `signal_class`.
+//      (They also differ in `agentId` and the derived `taskId`, which is what
+//      separates the two populations — but each surface is queried per-agent
+//      and the control proves the counted path works for its own agent, so
+//      neither field can substitute for the guard.) Every other axis the
+//      filters read (type, signal, category, timestamp, retraction keys) is
 //      identical.
-//   2. `signal_class` is read in exactly two places in the whole orchestrator:
-//      `isOperationalClassRow` (performance-reader.ts:247) and
-//      `isOperationalDisagreement` (:280). Neither signal-aggregate-index.ts nor
-//      the reader's `readSignalsRaw` inspects the field on its own;
+//   2. `signal_class` is read in three places in the orchestrator:
+//      `isOperationalClassRow` (performance-reader.ts:247),
+//      `isOperationalDisagreement` (:280), and `stampSignalClass`
+//      (performance-writer.ts:138). The third is unreachable here: it runs only
+//      inside PerformanceWriter's append methods, and these fixtures write the
+//      ledger directly with `fs.writeFileSync`, bypassing the writer entirely.
+//      Neither signal-aggregate-index.ts nor the reader's `readSignalsRaw`
+//      inspects the field on its own;
 //      `isOperationalDisagreement` is reached only from `computeScores`, which
 //      neither surface under test calls.
 //   3. So on both paths the ONLY code that can distinguish the two rows is the
