@@ -3722,6 +3722,31 @@ export function createMcpServer(): McpServer {
         return { content: [{ type: 'text' as const, text: 'No signals to record. Provide a signals array.' }] };
       }
 
+      // Orchestrator/reserved-agent scoring guard — issue #697, HANDBOOK invariant
+      // #14. The orchestrator (and reserved ids like `_system`) stream carries
+      // PRECONDITIONS only: those are auto-fired by the pipeline itself and never
+      // pass through this record surface. What DOES reach here is an operator
+      // manually recording a signal against `agent_id: "orchestrator"` — and the
+      // only signals valid for that stream are the operational-class ones
+      // (`operational_lesson`, `design_split`; see OPERATIONAL_RECORD_SIGNALS).
+      // Every other (scoring) signal against a protected id is rejected up front,
+      // fail-closed for the WHOLE batch — a single offending row voids the call
+      // rather than silently dropping just that one. Without this, an operator
+      // recording `hallucination_caught` against `orchestrator` (as happened 8x,
+      // pinning its accuracy to 0.00 and opening its circuit breaker) is accepted
+      // and scored exactly like a real agent finding.
+      for (const s of signals) {
+        const protectedAgent = s.agent_id === 'orchestrator' || isReservedAgentId(s.agent_id);
+        if (protectedAgent && !isOperationalRecordSignal(s.signal)) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Error: agent_id "${s.agent_id}" cannot receive scoring-class signal "${s.signal}" — the orchestrator/reserved stream carries operational signals only. Use signal:"operational_lesson" with finding_id "session:<sessionId>:<slug>" to record a process failure. (issue #697, HANDBOOK invariant #14)`,
+            }],
+          };
+        }
+      }
+
       try {
         const { emitConsensusSignals: emitRecordConsensusSignals, emitScoringAdjustmentSignals: emitScoringAdj, emitImplSignals: emitRecordImplSignals } = await import('@gossip/orchestrator');
         const wallClockMs = Date.now();
