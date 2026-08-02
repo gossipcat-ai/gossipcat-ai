@@ -7,6 +7,7 @@ import { gossipLog, log as _log } from './log';
 import { loadMemoryConfig } from './memory-config';
 import { emitPipelineSignals } from './signal-helpers';
 import { sanitizePromptMarkers } from './prompt-markers';
+import { stripAmbientStopwords } from './keyword-stopwords';
 
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 
@@ -47,18 +48,53 @@ const MIN_KEYWORD_HITS = 1;
  *   `auth*`  → author, authored          (left bare; the #676 case)
  *   `log*`   → login, logic, logistics   (left bare)
  *   `exec*`  → execution is in-domain, but `executive`/`executor` are not (left bare)
+ *
+ * AMBIENT-NOUN RULE (issue #700). No entry below may be a single ambient repo
+ * noun — a word that names gossipcat's own machinery or the scaffolding every
+ * dispatch brief shares (`path`, `session`, `token`, `memory`, `log`, `test`,
+ * `dashboard`, `prompt`, `high`/`medium`/`low`, `injection`). Those terms
+ * measure vocabulary overlap with this repo, not task relevance, which is how
+ * `trust_boundaries` reached a 59.4% brief fire rate at -0.19 effectiveness
+ * while `concurrency` sat at 15.7% and +0.58. The list, its measured document
+ * frequencies, and the two-part admission test live in `keyword-stopwords.ts`;
+ * `tests/orchestrator/keyword-stopwords.test.ts` pins that neither table
+ * contains one. Multi-word phrases are exempt — `file path*`, `unit test` and
+ * `prompt injection` are discriminative precisely because the qualifier pins
+ * the sense the bare noun loses.
  */
 export const DEFAULT_KEYWORDS: Record<string, string[]> = {
-  trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
+  // #700: `session` / `token` / `path` / `injection` removed — in a gossipcat
+  // brief they mean the orchestrator session, a context token, a file path and
+  // skill injection, never the security concepts. `path` alone matched 42.7% of
+  // briefs. Replaced with this repo's real trust-boundary vocabulary: the
+  // worktree `sandbox`, `scoped` write mode, `allowlist` checks, and the
+  // `path traversal` / `boundary escape` phrases (exempt from stopwording).
+  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
   // `sanitiz*` → sanitize/sanitized/sanitizes/sanitizing/sanitization/sanitizer.
   // No English word outside that family begins `sanitiz`. (The British `sanitis*`
   // spelling is still uncovered — same gap as the pre-#681 bare `sanitize`.)
   // `exec` stays bare: `exec*` would reach executive/executor, which are not
   // injection vocabulary.
-  injection_vectors: ['injection', 'xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
+  // #700: bare `injection` removed. 60 of its 62 corpus occurrences are skill /
+  // lesson / context injection, so it fired this category on briefs about the
+  // skill engine. The qualified phrases below keep the security sense and are
+  // deliberately low-frequency — firing rarely and correctly is the goal.
+  injection_vectors: ['xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command', 'prompt injection', 'shell injection', 'command injection', 'argument injection'],
   input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitiz*', 'input', 'form', 'request', 'coerce', 'transform'],
-  concurrency: ['race condition', 'concurrent', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore'],
-  resource_exhaustion: ['memory', 'leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
+  // #700: this category was the anti-correlation's other half — the best-scoring
+  // skill (+0.58) firing on almost nothing, because every entry was textbook
+  // jargon absent from real briefs. `race condition` matched 0.8% of briefs
+  // while bare `race` matched 5.7%, so the phrase is dropped for the bare form
+  // (which subsumes it). `concurren*` folds in concurrent/concurrently/
+  // concurrency; no English word outside that family begins `concurren`.
+  // `toctou`, `interleav*` and `in-flight` are the terms this repo actually uses
+  // for the failure. `read-modify-write` / `check-then-act` were considered and
+  // rejected: both measured 0 corpus hits, which is the same dead-jargon problem.
+  concurrency: ['race', 'concurren*', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore', 'toctou', 'interleav*', 'in-flight'],
+  // #700: `memory` removed — in this repo it is the memory system (gossip_remember,
+  // memory files) at 17.0% of briefs, not RAM. `leak` and `unbounded` carry the
+  // exhaustion sense precisely.
+  resource_exhaustion: ['leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
   // `cast` deliberately stays bare — `cast*` reaches castle/caster/castigate, and
   // the trailing \b is what keeps it out of `broadcast` (#676). `casting` is
   // therefore still unreachable; that is the accepted trade.
@@ -106,10 +142,19 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // `doesn't exist` is a contraction, not an inflection — no stem reaches it.
   citation_grounding: ['cite*', 'citing', 'citation*', 'line number*', 'anchor*', 'file path*', 'referenc*', 'fabricate', 'fabricates', 'fabricated', 'fabricating', 'fabrication', 'hallucinate', 'hallucinates', 'hallucinated', 'hallucinating', 'hallucination', 'verif*', 'does not exist', "doesn't exist", 'no such'],
   // Phase 1 dev-quality extensions (consensus 09693c51-184246e5).
-  observability: ['log', 'logging', 'metric', 'tracing', 'telemetry', 'monitor', 'dashboard', 'stderr', 'observability'],
-  cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'prompt', 'banner', 'spinner'],
+  // #700: `log` (16.6%) and `dashboard` (35.9%) removed — this repo ships a
+  // dashboard and logs constantly, so both fired on briefs with no observability
+  // concern. `logging` stays: at 1.5% it is not ambient and names the activity.
+  observability: ['logging', 'metric', 'tracing', 'telemetry', 'monitor', 'stderr', 'observability'],
+  // #700: `prompt` removed (12.7%) — every brief here is about prompts. `cli`
+  // (22.9%) is deliberately KEPT: it clears the ambient DF bar but is the literal
+  // subject of this category, so it fails the second admission test.
+  cli_ergonomics: ['cli', 'flag', 'help text', 'error message', 'usage', 'banner', 'spinner'],
   performance: ['latency', 'slow', 'performance', 'n+1', 'uncached', 'readfilesync', 'synchronous', 'hot path'],
-  testing: ['test', 'tests', 'testing', 'coverage', 'mock', 'fixture', 'unit test', 'integration test', 'e2e', 'test suite'],
+  // #700: bare `test` / `tests` removed (42.9% / 45.9%) — "add tests", "tests
+  // pass" is boilerplate in every brief and names the scaffolding, not a testing
+  // failure. The phrases and `testing` itself survive and are discriminative.
+  testing: ['testing', 'coverage', 'mock', 'fixture', 'unit test', 'integration test', 'e2e', 'test suite'],
 };
 
 export interface DroppedSkill {
@@ -585,7 +630,16 @@ function countKeywordHits(skillContent: string, skillName: string, task: string,
 function getKeywords(content: string, skillName: string, sourceLabel?: string): string[] {
   const frontmatter = parseSkillFrontmatter(content, sourceLabel ?? skillName);
   if (frontmatter?.keywords && frontmatter.keywords.length > 0) {
-    return frontmatter.keywords.map(k => k.toLowerCase());
+    // Ambient repo nouns are stripped at match time, not just curated out of the
+    // tables above (issue #700). Frontmatter keywords are the dominant source
+    // here and the tables never reach them: generated skills bake a snapshot of
+    // CATEGORY_KEYWORDS into their own file, and LLM-authored keyword lists are
+    // not drawn from the tables at all — the shipped `opus-implementer`
+    // trust-boundaries skill lists `mcp, relay, gossip, path, session, token,
+    // injection`, seven ambient nouns that alone made it fire on every brief.
+    // stripAmbientStopwords is fail-safe: an all-ambient list is returned intact
+    // rather than emptied into the filename fallback below.
+    return stripAmbientStopwords(frontmatter.keywords.map(k => k.toLowerCase()));
   }
   if (frontmatter?.category && DEFAULT_KEYWORDS[frontmatter.category]) {
     return DEFAULT_KEYWORDS[frontmatter.category];

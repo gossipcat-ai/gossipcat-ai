@@ -16,6 +16,7 @@ import { LLMMessage } from '@gossip/types';
 import { ConsensusSignal } from './consensus-types';
 import { normalizeSkillName } from './skill-name';
 import { readSkillFreshness } from './skill-freshness';
+import { migrateSkillKeywords } from './skill-keyword-migration';
 import {
   resolveVerdict,
   TIMEOUT_MS,
@@ -129,17 +130,26 @@ const KNOWN_CATEGORIES = new Set([
  * per-stem over-match audit behind each `*` below, is documented on
  * `DEFAULT_KEYWORDS` in skill-loader.ts. Do not add one here without doing that
  * audit — `getPattern()` compiles these for every skill of every agent.
+ *
+ * The issue #700 ambient-noun rule applies here too, and matters MORE on this
+ * table: these lists are pasted verbatim into the `keywords:` frontmatter of
+ * every generated skill, so an ambient noun added here is baked into agent-local
+ * files that no later table edit reaches (which is why #700 needed the backfill
+ * in skill-keyword-migration.ts). See `keyword-stopwords.ts` for the rule and
+ * the per-entry rationale, which is written up on the skill-loader copy.
  */
 export const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  trust_boundaries: ['auth', 'authentication', 'authorization', 'session', 'cookie', 'token', 'path', 'traversal', 'injection', 'middleware', 'permission', 'role', 'privilege', 'acl'],
-  injection_vectors: ['injection', 'xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command'],
+  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
+  injection_vectors: ['xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command', 'prompt injection', 'shell injection', 'command injection', 'argument injection'],
   input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitiz*', 'input', 'form', 'request', 'coerce', 'transform'],
-  concurrency: ['race condition', 'concurrent', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore'],
-  resource_exhaustion: ['memory', 'leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
+  concurrency: ['race', 'concurren*', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore', 'toctou', 'interleav*', 'in-flight'],
+  resource_exhaustion: ['leak', 'unbounded', 'growth', 'limit', 'cap', 'timeout', 'pool', 'cache', 'backpressure', 'buffer', 'queue', 'throttle'],
   type_safety: ['type guard', 'generic', 'cast', 'assertion', 'narrowing', 'discriminated', 'satisfies'],
   error_handling: ['error handling', 'catch', 'throw', 'exception', 'retry*', 'retries', 'retried', 'fallback', 'recovery', 'graceful'],
   data_integrity: ['data integrity', 'migration', 'serializ*', 'deserializ*', 'corrupt*', 'consistency', 'invariant', 'transaction', 'rollback', 'idempotent'],
-  severity_calibration: ['severity', 'critical', 'high', 'medium', 'low', 'impact', 'risk', 'priority', 'triage', 'cvss'],
+  // #700: `high` / `medium` / `low` removed — bare severity adjectives at ~19-20%
+  // of briefs each, carrying no calibration signal on their own.
+  severity_calibration: ['severity', 'critical', 'impact', 'risk', 'priority', 'triage', 'cvss'],
   // Citation grounding — fabrication-class failures: cited file/line/symbol does not match repo state.
   // Gate for this is a skill bind + signal category, not the consensus-engine verifyCitations AND-gate
   // (which only fires on keyword+regex dual-match, rarely in practice).
@@ -204,6 +214,7 @@ export class SkillEngine {
   private techStackCache: string | null | undefined = undefined; // undefined = not yet computed
   private statusMigrationRan = false;
   private orphanCleanupRan = false;
+  private keywordMigrationRan = false;
 
   constructor(
     private llm: ILLMProvider,
@@ -232,6 +243,38 @@ export class SkillEngine {
     } catch (err) {
       process.stderr.write(
         `[gossipcat] skill-engine: orphan cleanup failed: ${(err as Error).message}\n`,
+      );
+    }
+
+    // Fire-and-forget: bring already-generated skill files' `keywords:`
+    // frontmatter in line with the current CATEGORY_KEYWORDS (issue #700).
+    // Generated skills bake a snapshot of the table into their own file, so a
+    // table edit alone never reaches them — this is the pass that #676/#679
+    // lacked. Idempotent, so re-running on every construction is a no-op once
+    // converged.
+    try {
+      this.runKeywordBackfill();
+    } catch (err) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: keyword backfill failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+
+  /**
+   * One-time startup pass: rewrite stale `keywords:` frontmatter across every
+   * `.gossip/**\/skills/*.md`. See skill-keyword-migration.ts for the
+   * reseed-vs-strip rule.
+   */
+  private runKeywordBackfill(): void {
+    if (this.keywordMigrationRan) return;
+    this.keywordMigrationRan = true;
+
+    const migrated = migrateSkillKeywords(this.projectRoot, CATEGORY_KEYWORDS);
+    for (const entry of migrated) {
+      process.stderr.write(
+        `[gossipcat] skill-engine: ${entry.mode} keywords in ${entry.path} ` +
+        `(${entry.before.length} → ${entry.after.length})\n`,
       );
     }
   }
