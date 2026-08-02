@@ -1404,7 +1404,7 @@ export async function handleCollect(
   try {
     const gaps = ctx.mainAgent.getSkillGapSuggestions();
     if (gaps.length > 0 && ctx.skillEngine) {
-      const { normalizeSkillName: nsn, readSkillFreshness: rsf } = await import('@gossip/orchestrator');
+      const { normalizeSkillName: nsn, readSkillFreshness: rsf, resolveAutoBindMode } = await import('@gossip/orchestrator');
       const { appendSkillDevelopAudit } = await import('./skill-develop-audit');
       const developed: string[] = [];
       const failed: string[] = [];
@@ -1412,10 +1412,15 @@ export async function handleCollect(
         // Capture pre-develop freshness for audit
         const freshnessSnapshot = rsf(gap.agentId, gap.category, process.cwd());
         try {
-          await ctx.skillEngine.generate(gap.agentId, gap.category);
+          const generated = await ctx.skillEngine.generate(gap.agentId, gap.category);
           const skillName = nsn(gap.category);
           const skillIndex = ctx.mainAgent.getSkillIndex();
-          if (skillIndex) skillIndex.bind(gap.agentId, skillName, { source: 'auto', mode: 'contextual' });
+          // Honour the mode declared in the generated skill's own frontmatter;
+          // default to permanent when absent (#675).
+          if (skillIndex) {
+            const declaredMode = resolveAutoBindMode(generated.content, generated.path);
+            skillIndex.bind(gap.agentId, skillName, { source: 'auto', mode: declaredMode });
+          }
           // Suppress AFTER successful generate — not before
           const pipeline = (ctx.mainAgent as any).pipeline;
           if (pipeline?.suppressSkillGapAlert) {

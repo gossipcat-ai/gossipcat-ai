@@ -4816,14 +4816,17 @@ export function createMcpServer(): McpServer {
           if (utilityResult?.status === 'completed' && utilityResult.result && stashedMeta) {
             try {
               const result = ctx.skillEngine.saveFromRaw(agent_id, category, utilityResult.result, stashedMeta);
-              const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
+              const { normalizeSkillName: nsn, resolveAutoBindMode } = await import('@gossip/orchestrator');
               const skillName = nsn(category);
 
-              // Auto-bind to skill index so it's injected on next dispatch
+              // Auto-bind to skill index so it's injected on next dispatch.
+              // Honour a `mode: contextual` declared in the generated skill's
+              // own frontmatter; default to permanent when absent (#675).
               if (ctx.mainAgent) {
                 const skillIndex = ctx.mainAgent.getSkillIndex();
                 if (skillIndex) {
-                  skillIndex.bind(agent_id, skillName, { source: 'auto', mode: 'permanent' });
+                  const declaredMode = resolveAutoBindMode(result.content, result.path);
+                  skillIndex.bind(agent_id, skillName, { source: 'auto', mode: declaredMode });
                 }
 
                 // Also register on agent config for backwards compat
@@ -4912,14 +4915,17 @@ export function createMcpServer(): McpServer {
         // ── Direct path (no native utility config, or fallback) ──
         try {
           const result = await ctx.skillEngine.generate(agent_id, category);
-          const { normalizeSkillName: nsn } = await import('@gossip/orchestrator');
+          const { normalizeSkillName: nsn, resolveAutoBindMode } = await import('@gossip/orchestrator');
           const skillName = nsn(category);
 
-          // Auto-bind to skill index so it's injected on next dispatch
+          // Auto-bind to skill index so it's injected on next dispatch.
+          // Honour a `mode: contextual` declared in the generated skill's
+          // own frontmatter; default to permanent when absent (#675).
           if (ctx.mainAgent) {
             const skillIndex = ctx.mainAgent.getSkillIndex();
             if (skillIndex) {
-              skillIndex.bind(agent_id, skillName, { source: 'auto', mode: 'permanent' });
+              const declaredMode = resolveAutoBindMode(result.content, result.path);
+              skillIndex.bind(agent_id, skillName, { source: 'auto', mode: declaredMode });
             }
 
             // Also register on agent config for backwards compat
