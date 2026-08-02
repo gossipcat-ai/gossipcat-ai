@@ -44,6 +44,16 @@ describe('#700 — normalization contract', () => {
     expect(normalizeKeywordForStopwordLookup('verif*')).toBe('verif');
   });
 
+  it('strips ALL trailing stem markers, matching keywordStem (consensus b416f60f:f4)', () => {
+    // `keywordStem` in skill-loader.ts strips /\*+$/, so `token**` compiles to
+    // the same wildcard pattern as `token*`. A single-star strip here let the
+    // doubled marker evade the filter while still matching every brief.
+    expect(normalizeKeywordForStopwordLookup('token**')).toBe('token');
+    expect(isAmbientStopword('token**')).toBe(true);
+    expect(isAmbientStopword('path***')).toBe(true);
+    expect(stripAmbientStopwords(['token**', 'auth'])).toEqual(['auth']);
+  });
+
   it('leaves non-ambient keywords alone', () => {
     for (const keyword of ['auth', 'traversal', 'sandbox', 'toctou', 'deadlock', 'sanitiz*', 'zod']) {
       expect(isAmbientStopword(keyword)).toBe(false);

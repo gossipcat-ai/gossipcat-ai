@@ -112,8 +112,10 @@ export const AMBIENT_STOPWORDS: ReadonlySet<string> = new Set([
  * runtime filter does or it would pass vacuously on a `*`-suffixed ambient noun.
  */
 export function normalizeKeywordForStopwordLookup(keyword: string): string {
-  const trimmed = keyword.trim().toLowerCase();
-  return trimmed.endsWith('*') ? trimmed.slice(0, -1) : trimmed;
+  // /\*+$/ (all trailing stars, not one) matches `keywordStem` in
+  // skill-loader.ts — a doubled marker like `token**` still compiles to the
+  // same wildcard pattern as `token*`, so it must be judged the same way here.
+  return keyword.trim().toLowerCase().replace(/\*+$/, '');
 }
 
 /**

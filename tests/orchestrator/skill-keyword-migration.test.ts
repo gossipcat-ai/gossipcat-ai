@@ -66,6 +66,29 @@ describe('#700 — rewriteKeywordsFrontmatter', () => {
     expect(rewriteKeywordsFrontmatter('no frontmatter here', ['a'])).toBeNull();
     expect(rewriteKeywordsFrontmatter('---\nname: s\n---\nbody', ['a'])).toBeNull();
   });
+
+  it("does not expand $-substitution sequences from file content (consensus b416f60f:f13)", () => {
+    // Frontmatter is model-authored. With a string replacement, `$'` in any
+    // field spliced the document body into the frontmatter and dropped every
+    // field after the injected `---`; `$&` nested the frontmatter into itself.
+    const raw =
+      "---\nname: s\ndescription: don't trust the caller's $' expansion or $& or $$ here\nkeywords: [alpha, beta]\nstatus: active\n---\n\nbody\n";
+    const out = rewriteKeywordsFrontmatter(raw, ['gamma']);
+    expect(out).toContain("description: don't trust the caller's $' expansion or $& or $$ here");
+    expect(out).toContain('keywords: [gamma]');
+    expect(out).toContain('status: active');
+    const fm = parseSkillFrontmatter(out!, 'test');
+    expect(fm?.keywords).toEqual(['gamma']);
+    expect(fm?.status).toBe('active');
+  });
+
+  it('a $-sequence in a surviving keyword does not corrupt the block form', () => {
+    const raw = "---\nname: s\nkeywords:\n  - alpha\n  - beta\nstatus: active\n---\n\nbody\n";
+    const out = rewriteKeywordsFrontmatter(raw, ["$'", '$&', 'gamma']);
+    expect(out).toContain("  - $'\n  - $&\n  - gamma\n");
+    expect(out).toContain('status: active');
+    expect(out).toContain('\n\nbody\n');
+  });
 });
 
 describe('#700 — reseed vs strip', () => {
@@ -154,8 +177,11 @@ describe('#700 — migration safety', () => {
   });
 
   it('does NOT bump `version:` — a vocabulary backfill is not a skill revision', () => {
-    // `version` drives skill-engine's optimistic-concurrency drift check; a
-    // bump here would make the next legitimate write abort as stale.
+    // `version` drives skill-engine's optimistic-concurrency drift check. Not
+    // bumping is a policy choice, not an OCC requirement: a later writer
+    // re-reads and captures whatever version is on disk (contract step 1), so
+    // only a cross-process writer already in flight would abort — which is the
+    // OCC design intent. This migration simply isn't a skill revision.
     const path = writeSkill('a1', 's', 'name: s\nversion: 3\nstatus: active\nkeywords: [path, deadlock]');
     migrateSkillKeywords(root, CATEGORY_KEYWORDS);
     expect(readFileSync(path, 'utf-8')).toContain('version: 3');

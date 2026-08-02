@@ -33,7 +33,7 @@
  * drives skill-engine's optimistic-concurrency drift check, and a migration that
  * changes only match vocabulary is not a new skill revision.
  */
-import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { readdirSync, readFileSync, writeFileSync, renameSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { parseSkillFrontmatter } from './skill-parser';
 import { stripAmbientStopwords } from './keyword-stopwords';
@@ -99,10 +99,14 @@ export function rewriteKeywordsFrontmatter(raw: string, keywords: readonly strin
   if (!fm) return null;
 
   const block = fm[1];
+  // Replacements are passed as functions throughout: the replacement text is
+  // file-derived (model-authored frontmatter and keywords), and a string
+  // replacement would expand `$'` / `` $` `` / `$&` / `$$` sequences in it,
+  // splicing document content into the frontmatter.
   const inline = block.match(/^(\s*keywords:[ \t]*)\[[^\]]*\][ \t]*$/m);
   if (inline) {
-    const replaced = block.replace(inline[0], `${inline[1]}[${keywords.join(', ')}]`);
-    return raw.replace(block, replaced);
+    const replaced = block.replace(inline[0], () => `${inline[1]}[${keywords.join(', ')}]`);
+    return raw.replace(block, () => replaced);
   }
 
   // Block sequence: `keywords:` on its own line followed by `- item` lines.
@@ -111,8 +115,8 @@ export function rewriteKeywordsFrontmatter(raw: string, keywords: readonly strin
     const indent = seq[1];
     const itemIndent = seq[2].match(/^([ \t]*)-/)?.[1] ?? `${indent}  `;
     const rendered = keywords.map(k => `${itemIndent}- ${k}`).join('\n');
-    const replaced = block.replace(seq[0], `${indent}keywords:\n${rendered}\n`);
-    return raw.replace(block, replaced);
+    const replaced = block.replace(seq[0], () => `${indent}keywords:\n${rendered}\n`);
+    return raw.replace(block, () => replaced);
   }
 
   return null;
@@ -204,7 +208,13 @@ export function migrateSkillKeywords(
         const rewritten = rewriteKeywordsFrontmatter(raw, next.after);
         if (rewritten === null) continue;
 
-        if (!options.dryRun) writeFileSync(skillPath, rewritten, 'utf-8');
+        if (!options.dryRun) {
+          // Same-directory tmp + rename, matching writeSkillFileFromParts: a
+          // crash mid-write must not leave a torn skill file.
+          const tmpPath = `${skillPath}.tmp.${process.pid}`;
+          writeFileSync(tmpPath, rewritten, 'utf-8');
+          renameSync(tmpPath, skillPath);
+        }
         migrated.push({
           path: skillPath,
           mode: next.mode,
