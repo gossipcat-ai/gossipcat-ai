@@ -288,3 +288,21 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
     scope,
   };
 }
+
+/**
+ * Decide the skill-index binding mode for an auto-bound (generated) skill.
+ *
+ * Issue #675: both auto-bind sites previously hardcoded `'permanent'`, so a
+ * generated skill declaring `mode: contextual` in its own frontmatter was
+ * still bound permanent and injected on every dispatch. The declared mode is
+ * now authoritative; `'permanent'` remains the default whenever the file has
+ * no frontmatter, or the frontmatter omits or misspells `mode`.
+ */
+export function resolveAutoBindMode(
+  content: string,
+  sourceLabel?: string,
+): 'permanent' | 'contextual' {
+  return parseSkillFrontmatter(content, sourceLabel)?.mode === 'contextual'
+    ? 'contextual'
+    : 'permanent';
+}

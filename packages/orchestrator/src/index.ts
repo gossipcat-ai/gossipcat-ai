@@ -213,7 +213,7 @@ export type { ProjectInitializerConfig } from './project-initializer';
 export { TeamManager } from './team-manager';
 export type { TeamManagerConfig } from './team-manager';
 export { normalizeSkillName } from './skill-name';
-export { parseSkillFrontmatter } from './skill-parser';
+export { parseSkillFrontmatter, resolveAutoBindMode } from './skill-parser';
 export type { SkillFrontmatter, SkillScope } from './skill-parser';
 export { extractCategories, isValidCategory, VALID_CATEGORIES } from './category-extractor';
 export { logUncategorizedFinding, getUncategorizedStatusLine } from './uncategorized-logger';
