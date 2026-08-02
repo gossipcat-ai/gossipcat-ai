@@ -617,16 +617,44 @@ export function resolveSkill(
   // Sanitize agentId to prevent path traversal
   if (!SAFE_AGENT_ID.test(agentId)) return null;
 
-  // Use canonical normalization for skill name (consistent with SkillIndex)
-  const normalized = normalizeSkillName(skill);
-  if (!normalized) return null;
-  const filename = `${normalized}.md`;
-
   const bases = [
     resolve(projectRoot, '.gossip', 'agents', agentId, 'skills'),
     resolve(projectRoot, '.gossip', 'skills'),
     resolve(__dirname, 'default-skills'),
   ];
+
+  return resolveSkillFromBases(bases, skill);
+}
+
+/**
+ * Resolve a skill name against the agent-agnostic bases only (project-wide
+ * `.gossip/skills`, then bundled `default-skills`) — never an agent-local
+ * `.gossip/agents/<id>/skills` directory. For callers that have no specific
+ * agentId in hand (e.g. an ad-hoc `gossip_skills(action: "get")` lookup)
+ * and must not risk resolving into an unrelated agent's local skill dir.
+ * Shares the same path-traversal guard and safe-read behavior as {@link resolveSkill}.
+ */
+export function resolveSharedSkill(
+  skill: string,
+  projectRoot: string,
+): { content: string; path: string } | null {
+  const bases = [
+    resolve(projectRoot, '.gossip', 'skills'),
+    resolve(__dirname, 'default-skills'),
+  ];
+
+  return resolveSkillFromBases(bases, skill);
+}
+
+/** Shared resolution walk used by {@link resolveSkill} and {@link resolveSharedSkill}. */
+function resolveSkillFromBases(
+  bases: string[],
+  skill: string,
+): { content: string; path: string } | null {
+  // Use canonical normalization for skill name (consistent with SkillIndex)
+  const normalized = normalizeSkillName(skill);
+  if (!normalized) return null;
+  const filename = `${normalized}.md`;
 
   for (const base of bases) {
     const candidate = resolve(base, filename);

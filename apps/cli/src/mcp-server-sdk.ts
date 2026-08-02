@@ -4549,12 +4549,12 @@ export function createMcpServer(): McpServer {
   // ── Unified skill management ─────────────────────────────────────────────
   server.tool(
     'gossip_skills',
-    'Manage agent skills. Actions: list (show skill index), bind (attach skill to agent), unbind (remove skill from agent), build (create skills from gap suggestions), develop (generate skill from ATI competency data), prune (drop skill-index entries for agents no longer in config.json).',
+    'Manage agent skills. Actions: list (show skill index), get (return a skill\'s raw markdown by name), bind (attach skill to agent), unbind (remove skill from agent), build (create skills from gap suggestions), develop (generate skill from ATI competency data), prune (drop skill-index entries for agents no longer in config.json).',
     {
-      action: z.enum(['list', 'bind', 'unbind', 'build', 'develop', 'prune']).describe('Action to perform'),
-      // bind/unbind/develop params
-      agent_id: z.string().optional().describe('Agent ID (required for bind, unbind, develop)'),
-      skill: z.string().optional().describe('Skill name (required for bind, unbind)'),
+      action: z.enum(['list', 'get', 'bind', 'unbind', 'build', 'develop', 'prune']).describe('Action to perform'),
+      // bind/unbind/develop/get params
+      agent_id: z.string().optional().describe('Agent ID (required for bind, unbind, develop; optional for get — when given, checks that agent\'s local skills dir first)'),
+      skill: z.string().optional().describe('Skill name (required for bind, unbind, get)'),
       // NOTE: no z.default() here — combining .default().optional() on a boolean
       // produces a malformed JSON schema emitted to MCP clients, which then
       // mis-serialize sibling complex fields (notably `skills: [...]`) as strings,
@@ -4595,6 +4595,25 @@ export function createMcpServer(): McpServer {
         });
 
         return { content: [{ type: 'text' as const, text: `Skill Index (${agentIds.length} agents):\n\n${sections.join('\n\n')}` }] };
+      }
+
+      // ── get ──
+      if (action === 'get') {
+        if (!skill) return { content: [{ type: 'text' as const, text: 'Error: skill is required for get.' }] };
+
+        const { resolveSkill: resolveSkillFn, resolveSharedSkill } = await import('@gossip/orchestrator');
+        const resolved = agent_id
+          ? resolveSkillFn(agent_id, skill, process.cwd())
+          : resolveSharedSkill(skill, process.cwd());
+
+        if (!resolved) {
+          const searched = agent_id
+            ? `agent-local (.gossip/agents/${agent_id}/skills), project-wide (.gossip/skills), and bundled (default-skills)`
+            : `project-wide (.gossip/skills) and bundled (default-skills)`;
+          return { content: [{ type: 'text' as const, text: `Skill "${skill}" not found. Searched: ${searched}.` }] };
+        }
+
+        return { content: [{ type: 'text' as const, text: `# skill: ${skill}  (resolved: ${resolved.path})\n\n${resolved.content}` }] };
       }
 
       // ── bind ──
@@ -5692,7 +5711,7 @@ export function createMcpServer(): McpServer {
         // Power-user (5)
         { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval.' },
         { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights.' },
-        { name: 'gossip_skills', desc: 'Manage skills. action: list, bind, unbind, build, develop.' },
+        { name: 'gossip_skills', desc: 'Manage skills. action: list, get, bind, unbind, build, develop.' },
         { name: 'gossip_config', desc: 'Manage runtime feature-gate flags in .gossip/runtime-flags.json. action: list, get, set, unset, reload.' },
         { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
         { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
