@@ -95,23 +95,42 @@ describe('auto-bind slot written from a declared mode', () => {
   });
 });
 
-describe('mcp-server-sdk auto-bind sites', () => {
-  const source = readFileSync(
-    join(__dirname, '..', '..', 'apps', 'cli', 'src', 'mcp-server-sdk.ts'),
-    'utf8',
-  );
+describe('auto-bind call sites', () => {
+  const cliSrc = join(__dirname, '..', '..', 'apps', 'cli', 'src');
+  const mcpServer = readFileSync(join(cliSrc, 'mcp-server-sdk.ts'), 'utf8');
+  const collect = readFileSync(join(cliSrc, 'handlers', 'collect.ts'), 'utf8');
+  const sources: Array<[string, string]> = [
+    ['mcp-server-sdk.ts', mcpServer],
+    ['collect.ts', collect],
+  ];
 
-  it('no auto bind site hardcodes a mode any more', () => {
-    expect(source).not.toContain("{ source: 'auto', mode: 'permanent' }");
+  it.each(sources)('%s hardcodes no mode literal at any auto bind site', (_name, source) => {
+    const hardcoded = source.match(/\.bind\([^)]*\{ source: 'auto', mode: '(permanent|contextual)' \}\)/g);
+    expect(hardcoded).toBeNull();
   });
 
-  it('both auto bind sites pass a resolved mode', () => {
-    const matches = source.match(/skillIndex\.bind\(agent_id, skillName, \{ source: 'auto', mode: declaredMode \}\)/g);
+  it.each(sources)('%s derives every auto bind mode via resolveAutoBindMode', (_name, source) => {
+    const binds = source.match(/skillIndex\.bind\([^)]*source: 'auto'[^)]*\)/g) ?? [];
+    expect(binds.length).toBeGreaterThan(0);
+    for (const bind of binds) expect(bind).toContain('mode: declaredMode');
+    expect(source.match(/const declaredMode = resolveAutoBindMode\(/g)).toHaveLength(binds.length);
+  });
+
+  it('the two mcp-server-sdk.ts sites resolve from the saved skill result', () => {
+    const matches = mcpServer.match(/const declaredMode = resolveAutoBindMode\(result\.content, result\.path\);/g);
     expect(matches).toHaveLength(2);
   });
 
-  it('both auto bind sites derive declaredMode via resolveAutoBindMode', () => {
-    const matches = source.match(/const declaredMode = resolveAutoBindMode\(result\.content, result\.path\);/g);
-    expect(matches).toHaveLength(2);
+  it('the collect.ts skill-gap site resolves from the generated skill result', () => {
+    expect(collect).toContain('const generated = await ctx.skillEngine.generate(gap.agentId, gap.category);');
+    expect(collect).toContain('const declaredMode = resolveAutoBindMode(generated.content, generated.path);');
+  });
+
+  it('covers every skillIndex.bind auto call site in apps/cli', () => {
+    const total = sources.reduce(
+      (n, [, source]) => n + (source.match(/skillIndex\.bind\([^)]*source: 'auto'[^)]*\)/g) ?? []).length,
+      0,
+    );
+    expect(total).toBe(3);
   });
 });
