@@ -52,7 +52,7 @@ const MIN_KEYWORD_HITS = 1;
  * AMBIENT-NOUN RULE (issue #700). No entry below may be a single ambient repo
  * noun — a word that names gossipcat's own machinery or the scaffolding every
  * dispatch brief shares (`path`, `session`, `token`, `memory`, `log`, `test`,
- * `dashboard`, `prompt`, `high`/`medium`/`low`, `injection`). Those terms
+ * `dashboard`, `prompt`, `high`/`medium`/`low`, `injection`, `scoped`). Those terms
  * measure vocabulary overlap with this repo, not task relevance, which is how
  * `trust_boundaries` reached a 59.4% brief fire rate at -0.19 effectiveness
  * while `concurrency` sat at 15.7% and +0.58. The list, its measured document
@@ -67,9 +67,14 @@ export const DEFAULT_KEYWORDS: Record<string, string[]> = {
   // brief they mean the orchestrator session, a context token, a file path and
   // skill injection, never the security concepts. `path` alone matched 42.7% of
   // briefs. Replaced with this repo's real trust-boundary vocabulary: the
-  // worktree `sandbox`, `scoped` write mode, `allowlist` checks, and the
-  // `path traversal` / `boundary escape` phrases (exempt from stopwording).
-  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
+  // worktree `sandbox`, the `scoped write*` mode phrase, `allowlist` checks, and
+  // the `path traversal` / `boundary escape` phrases (exempt from stopwording).
+  // #675 P3: that replacement first shipped as bare `scoped`, which was itself an
+  // ambient repo noun — 45/45 corpus occurrences are gossipcat machinery (scoped
+  // write mode, scoped retraction, session-/consensus-/file-scoped ids), none a
+  // permissions sense. It is now stopworded, and the `scoped write*` phrase (DF
+  // 0.2%) carries the sense: firing rarely and correctly is the goal.
+  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped write*', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
   // `sanitiz*` → sanitize/sanitized/sanitizes/sanitizing/sanitization/sanitizer.
   // No English word outside that family begins `sanitiz`. (The British `sanitis*`
   // spelling is still uncovered — same gap as the pre-#681 bare `sanitize`.)

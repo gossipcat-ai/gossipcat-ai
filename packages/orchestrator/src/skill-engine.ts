@@ -139,7 +139,7 @@ const KNOWN_CATEGORIES = new Set([
  * the per-entry rationale, which is written up on the skill-loader copy.
  */
 export const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
+  trust_boundaries: ['auth', 'authentication', 'authorization', 'cookie', 'traversal', 'path traversal', 'middleware', 'permission', 'role', 'privilege', 'acl', 'trust boundary', 'boundary escape', 'sandbox', 'scoped write*', 'untrusted', 'allowlist', 'bypass*', 'escalat*', 'tamper*'],
   injection_vectors: ['xss', 'sql', 'sanitiz*', 'escape', 'template', 'eval', 'exec', 'html', 'uri', 'command', 'prompt injection', 'shell injection', 'command injection', 'argument injection'],
   input_validation: ['validation', 'schema', 'zod', 'parse', 'sanitiz*', 'input', 'form', 'request', 'coerce', 'transform'],
   concurrency: ['race', 'concurren*', 'mutex', 'lock', 'atomic', 'parallel', 'deadlock', 'semaphore', 'toctou', 'interleav*', 'in-flight'],
