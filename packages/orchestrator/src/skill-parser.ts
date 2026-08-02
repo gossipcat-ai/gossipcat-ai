@@ -62,6 +62,15 @@ export interface SkillFrontmatter {
    */
   regressed_from_passed_at?: string;
   /**
+   * Measured effectiveness delta written by `checkEffectiveness()` (positive =
+   * the skill improved the agent's outcomes, negative = it hurt). Absent on
+   * hand-authored skills and on generated files that have not been evaluated
+   * yet. Read by the skill-loader as the contextual-budget tiebreaker, so a
+   * missing value MUST be treated as 0 by callers rather than defaulted here —
+   * `undefined` distinguishes "never measured" from "measured at zero".
+   */
+  effectiveness?: number;
+  /**
    * Dispatch scope. Default 'any' preserves backwards-compatibility with skills
    * authored before this axis was introduced — they activate for all dispatches.
    * Explicit values ('review'|'implement'|'research') hard-reject on mismatch in
@@ -255,6 +264,15 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
     if (valid.length > 0) scope = valid;
   }
 
+  // Numeric coercion is fail-soft in the same spirit as task_type/scope: a
+  // malformed value (`effectiveness: high`) collapses to undefined rather than
+  // rejecting the skill. NaN must never reach the loader's comparator — an
+  // NaN-producing sort key makes the ranking non-deterministic.
+  // An empty value (`effectiveness:` with nothing after the colon) is absent,
+  // not zero — `Number('')` is 0, so the emptiness check has to come first.
+  const rawEffectiveness = fields.effectiveness ? Number(fields.effectiveness) : NaN;
+  const effectiveness = Number.isFinite(rawEffectiveness) ? rawEffectiveness : undefined;
+
   return {
     name: normalizeSkillName(fields.name),
     description: fields.description,
@@ -265,6 +283,7 @@ export function parseSkillFrontmatter(content: string, sourceLabel?: string): Sk
     sources: fields.sources,
     status: fields.status as SkillStatus,
     regressed_from_passed_at: fields.regressed_from_passed_at || undefined,
+    effectiveness,
     task_type,
     scope,
   };
