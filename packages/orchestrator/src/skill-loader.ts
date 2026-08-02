@@ -277,6 +277,10 @@ function categoryBoost(skillCategory: string | undefined, categories: string[]):
  * MIN_KEYWORD_HITS=1 gate (effective 0.5 < 1). A 1-hit skill with boost gets
  * 1.5 effective hits — enough to outrank a non-category 1-hit but not a
  * non-category 2-hit. See consensus f2ff0fac-fb384daa.
+ *
+ * Candidates that tie on effective hits are ranked by their frontmatter
+ * `effectiveness` (descending; absent = 0), with the skill name as the final
+ * deterministic tiebreaker. See issue #675 precondition 2.
  */
 export function loadSkills(
   agentId: string,
@@ -307,7 +311,7 @@ export function loadSkills(
 
   const permanent: Array<{ name: string; content: string; path: string }> = [];
   const scoped: Array<{ name: string; content: string; path: string }> = [];
-  const contextualCandidates: Array<{ name: string; content: string; path: string; hits: number; rawHits: number; boost: number }> = [];
+  const contextualCandidates: Array<{ name: string; content: string; path: string; hits: number; rawHits: number; boost: number; effectiveness: number }> = [];
   const loaded: string[] = [];
   const paths: string[] = [];
   const dropped: DroppedSkill[] = [];
@@ -449,7 +453,18 @@ export function loadSkills(
       // but a 1-hit skill with boost passes (1.5 >= 1) and outranks plain
       // 1-hit candidates during the descending sort below.
       if (effectiveHits >= MIN_KEYWORD_HITS) {
-        contextualCandidates.push({ name: skill, content, path: resolvedPath, hits: effectiveHits, rawHits, boost });
+        // Unmeasured skills rank as 0.0 — neutral, so they lose a tie to a
+        // positive-effectiveness peer and win one against a negative-
+        // effectiveness peer that survived the status filter.
+        contextualCandidates.push({
+          name: skill,
+          content,
+          path: resolvedPath,
+          hits: effectiveHits,
+          rawHits,
+          boost,
+          effectiveness: frontmatter?.effectiveness ?? 0,
+        });
       } else {
         // Report raw hits so operators see the real keyword-match count; boost
         // already failed to rescue, so recording effective hits would hide the
@@ -463,13 +478,24 @@ export function loadSkills(
     }
   }
 
-  // Sort contextual by effective hit count (descending), with alphabetical
-  // name as a deterministic tiebreaker. Node's Array.sort has been stable
-  // since v12, but relying on input order here would leak skill-index
-  // iteration order into activation decisions — the name tiebreaker makes
-  // ties deterministic regardless of discovery order.
+  // Sort contextual by effective hit count (descending), then by measured
+  // effectiveness (descending), then alphabetically by name.
+  //
+  // The effectiveness tier is issue #675 precondition 2: hit counts are coarse
+  // integers (plus the 0.5 category boost), so a 1-1-1 tie for the last budget
+  // slot was previously decided alphabetically — which evicted
+  // `input-validation` (+0.416) in favour of `concurrency` on measured briefs.
+  // Ranking by hits alone turns that tie into a coin flip on a skill the RL
+  // loop has shown to work. Hit count stays the PRIMARY key: this only
+  // reorders candidates that the existing ranking already considered equal.
+  //
+  // Alphabetical name remains the final tiebreaker. Node's Array.sort has been
+  // stable since v12, but relying on input order here would leak skill-index
+  // iteration order into activation decisions — the name tiebreaker makes ties
+  // deterministic regardless of discovery order.
   contextualCandidates.sort((a, b) => {
     if (b.hits !== a.hits) return b.hits - a.hits;
+    if (b.effectiveness !== a.effectiveness) return b.effectiveness - a.effectiveness;
     return a.name.localeCompare(b.name);
   });
   const accepted = contextualCandidates.slice(0, MAX_CONTEXTUAL_SKILLS);
