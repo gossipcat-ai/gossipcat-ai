@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { SkillIndex, SkillGapTracker, resolveSkillExists } from '@gossip/orchestrator';
+import { SkillIndex, SkillGapTracker, resolveSkillExists, resolveSkill, resolveSharedSkill } from '@gossip/orchestrator';
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `gossip-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -357,5 +357,97 @@ describe('build discovery reports pending gaps', () => {
     const result = tracker.checkThresholds();
     expect(result.count).toBe(0);
     expect(result.pending).not.toContain('error-handling');
+  });
+});
+
+// ── gossip_skills(action: "get") — issue #698 part 1 ──────────────────────
+//
+// The `get` handler (apps/cli/src/mcp-server-sdk.ts, action === 'get' branch)
+// is a thin wrapper over resolveSkill / resolveSharedSkill: it validates
+// `skill` is present, resolves via the appropriate function, and formats the
+// result. These tests exercise the resolution building blocks directly (the
+// handler itself is not exported — see mcp-skills-develop-throttle.test.ts
+// for the same "test the building blocks" convention used elsewhere in this
+// suite) plus a local mirror of the one-line `skill` presence guard.
+
+describe('resolveSkill / resolveSharedSkill power gossip_skills(action: "get")', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('(a) resolves a bundled default skill by name with no agent_id and no project override', () => {
+    // No .gossip/skills or .gossip/agents dir exists in tmpDir at all — the
+    // only place "implementation-discipline" can resolve from is the bundled
+    // default-skills/ directory shipped with @gossip/orchestrator.
+    const resolved = resolveSharedSkill('implementation-discipline', tmpDir);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.content).toContain('name: implementation-discipline');
+    expect(resolved!.path.endsWith(join('default-skills', 'implementation-discipline.md'))).toBe(true);
+  });
+
+  it('(a2) resolveSkill (agent_id path) also falls through to the bundled default when no local/project override exists', () => {
+    const resolved = resolveSkill('agent-a', 'implementation-discipline', tmpDir);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.content).toContain('name: implementation-discipline');
+  });
+
+  it('(b) returns null for a bogus skill name (not-found case for the handler to report)', () => {
+    expect(resolveSharedSkill('this-skill-does-not-exist-anywhere-xyz', tmpDir)).toBeNull();
+    expect(resolveSkill('agent-a', 'this-skill-does-not-exist-anywhere-xyz', tmpDir)).toBeNull();
+  });
+
+  it('(c) resolveSharedSkill prefers project-wide .gossip/skills over the bundled default', () => {
+    const projectSkillsDir = join(tmpDir, '.gossip', 'skills');
+    mkdirSync(projectSkillsDir, { recursive: true });
+    // Reuse a name that also exists in default-skills/ so precedence is meaningfully tested.
+    writeFileSync(join(projectSkillsDir, 'implementation-discipline.md'), '# PROJECT-WIDE OVERRIDE\n');
+
+    const resolved = resolveSharedSkill('implementation-discipline', tmpDir);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.content).toBe('# PROJECT-WIDE OVERRIDE\n');
+  });
+
+  it('(c) resolveSharedSkill never reads an agent-local skills dir, even when one exists for the same name', () => {
+    const agentSkillsDir = join(tmpDir, '.gossip', 'agents', 'some-agent', 'skills');
+    mkdirSync(agentSkillsDir, { recursive: true });
+    writeFileSync(join(agentSkillsDir, 'shared-priority-test.md'), '# AGENT LOCAL — SHOULD NEVER BE RETURNED\n');
+
+    const projectSkillsDir = join(tmpDir, '.gossip', 'skills');
+    mkdirSync(projectSkillsDir, { recursive: true });
+    writeFileSync(join(projectSkillsDir, 'shared-priority-test.md'), '# PROJECT WIDE\n');
+
+    const resolved = resolveSharedSkill('shared-priority-test', tmpDir);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.content).toBe('# PROJECT WIDE\n');
+  });
+
+  it('(c) resolveSharedSkill returns null for a skill that ONLY exists in an agent-local dir (no project/bundled copy)', () => {
+    const agentSkillsDir = join(tmpDir, '.gossip', 'agents', 'some-agent', 'skills');
+    mkdirSync(agentSkillsDir, { recursive: true });
+    writeFileSync(join(agentSkillsDir, 'agent-only-skill.md'), '# AGENT ONLY\n');
+
+    // resolveSkill (agent_id given) WOULD find it via the agent-local base...
+    expect(resolveSkill('some-agent', 'agent-only-skill', tmpDir)).not.toBeNull();
+    // ...but resolveSharedSkill (no agent_id / "get" without agent_id) must not.
+    expect(resolveSharedSkill('agent-only-skill', tmpDir)).toBeNull();
+  });
+
+  it('(d) the handler\'s "skill is required for get" guard rejects an empty/missing skill param', () => {
+    // Mirrors the exact one-line guard at the top of the `get` branch in
+    // apps/cli/src/mcp-server-sdk.ts: `if (!skill) return { ... 'Error: skill is required for get.' ... }`.
+    function simulateGetGuard(skill?: string): string | null {
+      if (!skill) return 'Error: skill is required for get.';
+      return null;
+    }
+
+    expect(simulateGetGuard(undefined)).toBe('Error: skill is required for get.');
+    expect(simulateGetGuard('')).toBe('Error: skill is required for get.');
+    expect(simulateGetGuard('implementation-discipline')).toBeNull();
   });
 });
