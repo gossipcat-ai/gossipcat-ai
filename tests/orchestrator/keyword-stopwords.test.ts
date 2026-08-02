@@ -81,9 +81,24 @@ describe('#700 — multi-word phrases are never stopwords', () => {
     ['prompt injection', 'injection_vectors'],
     ['command injection', 'injection_vectors'],
     ['trust boundary', 'trust_boundaries'],
+    ['scoped write*', 'trust_boundaries, #675 P3 replacement for bare `scoped`'],
   ])('%s survives (%s)', phrase => {
     expect(isAmbientStopword(phrase)).toBe(false);
     expect(stripAmbientStopwords([phrase])).toEqual([phrase]);
+  });
+
+  it('#675 P3 — bare `scoped` is ambient, but the `scoped write*` phrase is not', () => {
+    // `scoped` was added by #700 as replacement vocabulary and is itself an
+    // ambient repo noun: 45/45 corpus occurrences are gossipcat machinery
+    // (write_mode, scoped retraction, session-/consensus-/file-scoped ids).
+    expect(isAmbientStopword('scoped')).toBe(true);
+    expect(isAmbientStopword('scoped*')).toBe(true);
+    expect(isAmbientStopword('Scoped')).toBe(true);
+    expect(AMBIENT_STOPWORDS.has('scoped')).toBe(true);
+    expect(stripAmbientStopwords(['scoped', 'scoped write*'])).toEqual(['scoped write*']);
+    // The phrase must still compile to a matching pattern, not merely survive.
+    expect(getPattern('scoped write*').test('the scoped write contract forbids it')).toBe(true);
+    expect(getPattern('scoped write*').test('write_mode: "scoped" per task')).toBe(false);
   });
 
   it('#681 stem phrases still compile and match after surviving the filter', () => {
@@ -171,6 +186,12 @@ describe('#700 — TABLE HYGIENE: no ambient noun ships in either keyword table'
     expect(CATEGORY_KEYWORDS.severity_calibration).not.toContain('high');
     expect(CATEGORY_KEYWORDS.severity_calibration).not.toContain('medium');
     expect(CATEGORY_KEYWORDS.severity_calibration).not.toContain('low');
+    // #675 P3: bare `scoped` was #700's own replacement vocabulary; both tables
+    // now carry the phrase form instead, and they must agree.
+    expect(DEFAULT_KEYWORDS.trust_boundaries).not.toContain('scoped');
+    expect(CATEGORY_KEYWORDS.trust_boundaries).not.toContain('scoped');
+    expect(DEFAULT_KEYWORDS.trust_boundaries).toContain('scoped write*');
+    expect(CATEGORY_KEYWORDS.trust_boundaries).toContain('scoped write*');
   });
 
   it('DF-clearing terms that are their category subject are deliberately KEPT', () => {
@@ -197,11 +218,16 @@ describe('#700 — regenerated categories fire on the right vocabulary', () => {
     expect(fires('trust_boundaries', 'the relay drops resolutionRoots on consensus')).toBe(false);
     expect(fires('trust_boundaries', 'trim the context token budget for the dashboard')).toBe(false);
     expect(fires('trust_boundaries', 'skill injection happens after the cache warms')).toBe(false);
+    // #675 P3: bare `scoped` fired on gossipcat's own dispatch vocabulary.
+    expect(fires('trust_boundaries', 'the signal retraction is round-scoped')).toBe(false);
+    expect(fires('trust_boundaries', 'run this one scoped, not in a worktree')).toBe(false);
   });
 
   it('trust_boundaries still fires on real trust-boundary briefs', () => {
     expect(fires('trust_boundaries', 'the agent escaped the worktree sandbox')).toBe(true);
     expect(fires('trust_boundaries', 'absolute paths bypass the scoped write contract')).toBe(true);
+    // The phrase alone carries it — no `bypass*` in this one.
+    expect(fires('trust_boundaries', 'the scoped write mode let a file land outside')).toBe(true);
     expect(fires('trust_boundaries', 'validate against path traversal')).toBe(true);
     expect(fires('trust_boundaries', 'untrusted agent output is parsed directly')).toBe(true);
     expect(fires('trust_boundaries', 'the allowlist check is missing')).toBe(true);

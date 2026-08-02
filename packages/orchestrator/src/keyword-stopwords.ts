@@ -37,11 +37,23 @@
  * the DF bar but are the literal subject of `cli_ergonomics` and
  * `citation_grounding`, so they fail (b) and are kept.
  *
- * `injection` is the one entry admitted on (b) alone, at DF 7.4%: of its 62
- * corpus occurrences, 60 are skill/lesson/context injection ("injection point",
- * "injection time", "lesson injection poisons the cache") and 2 are the security
- * sense. The multi-word forms `prompt injection` / `shell injection` /
- * `command injection` survive stopwording and carry that sense precisely.
+ * Two entries are admitted on (b) alone.
+ *
+ * `injection`, at DF 7.4%: of its 62 corpus occurrences, 60 are skill/lesson/
+ * context injection ("injection point", "injection time", "lesson injection
+ * poisons the cache") and 2 are the security sense. The multi-word forms
+ * `prompt injection` / `shell injection` / `command injection` survive
+ * stopwording and carry that sense precisely.
+ *
+ * `scoped`, at DF 6.5% (26 of 400 documents, 45 occurrences, re-measured
+ * 2026-08-03) — and here the sense split is total rather than lopsided: all 45
+ * occurrences name gossipcat's own machinery (`write_mode: "scoped"`, scoped
+ * signal retraction, session-/consensus-/file-scoped identifiers, CSS-scoped
+ * tokens) and none carry a permissions sense. It was itself introduced by #700
+ * as replacement vocabulary for the removed `path` / `session` / `token`, which
+ * makes it this rule's own blind spot: a term can be the repo's trust-boundary
+ * jargon and an ambient repo noun at once. The phrase `scoped write*` (DF 0.2%)
+ * replaces it in `trust_boundaries` and survives stopwording.
  *
  * ## Scope of the filter
  *
@@ -102,6 +114,12 @@ export const AMBIENT_STOPWORDS: ReadonlySet<string> = new Set([
 
   // ── admitted on sense, not DF ────────────────────────────────────────────
   'injection',                  // 7.4%, but 60/62 occurrences are skill injection
+  'scoped',                     // 6.5%, but 45/45 occurrences are gossipcat's own
+                                // machinery: `write_mode: "scoped"`, scoped signal
+                                // retraction, session-/consensus-/file-scoped ids,
+                                // CSS-scoped tokens. Zero carry a permissions sense.
+                                // Ironically added by #700 itself as replacement
+                                // vocabulary; `scoped write*` carries the sense.
 ]);
 
 /**
