@@ -314,7 +314,11 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const skillPath = join(skillDir, 'trust-boundaries.md');
     writeFileSync(
       skillPath,
-      `---\nname: my-skill\ncategory: trust_boundaries\nkeywords: [auth, session]\nbaseline_accuracy_correct: 75\nbaseline_accuracy_hallucinated: 25\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 2\n---\n\n## Body\n\nSome content.\n`,
+      // Fixture keywords must avoid the #700 ambient stopwords. `session` was
+      // one, and the constructor's keyword backfill rewrote it out before
+      // checkEffectiveness ever ran — making this assertion fail on a
+      // preservation bug it does not have.
+      `---\nname: my-skill\ncategory: trust_boundaries\nkeywords: [auth, traversal]\nbaseline_accuracy_correct: 75\nbaseline_accuracy_hallucinated: 25\nstatus: pending\nbound_at: ${new Date().toISOString()}\nmigration_count: 2\n---\n\n## Body\n\nSome content.\n`,
     );
 
     const perfReader = makeStubPerfReader(
@@ -330,7 +334,7 @@ describe('SkillEngine.checkEffectiveness()', () => {
     const fm = readFrontmatter(skillPath);
     expect(fm.name).toBe('my-skill');
     expect(fm.category).toBe('trust_boundaries');
-    expect(fm.keywords).toBe('[auth, session]');
+    expect(fm.keywords).toBe('[auth, traversal]');
   });
 });
 

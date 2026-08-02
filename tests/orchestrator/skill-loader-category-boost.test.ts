@@ -171,13 +171,16 @@ Content for ${name}.
   // ─── Test 5: budget pressure ──────────────────────────────────────────────
   it('budget pressure: rank-4 category-match does NOT displace rank-3 non-match when effective hits are lower', () => {
     // Three strong non-category skills (2 raw hits each = 2.0 effective).
-    writeSkill('strong-a', 'error_handling', ['review', 'code']);
-    writeSkill('strong-b', 'data_integrity', ['review', 'code']);
-    writeSkill('strong-c', 'concurrency', ['review', 'code']);
+    // Fixture vocabulary must avoid the #700 ambient stopwords — `code` was one
+    // of the two keywords here and is now stripped at match time, which silently
+    // turned these into 1-hit skills and inverted the ranking this test pins.
+    writeSkill('strong-a', 'error_handling', ['review', 'handler']);
+    writeSkill('strong-b', 'data_integrity', ['review', 'handler']);
+    writeSkill('strong-c', 'concurrency', ['review', 'handler']);
     // One category-matched weaker skill (1 raw hit + 0.5 boost = 1.5 effective).
     writeSkill('weak-category', 'trust_boundaries', ['authentication']);
 
-    const task = 'review the authentication code';
+    const task = 'review the authentication handler';
     const categories = extractCategories(task);
     expect(categories).toContain('trust_boundaries');
 
