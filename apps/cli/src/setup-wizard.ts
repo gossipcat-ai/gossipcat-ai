@@ -2,41 +2,7 @@ import * as p from '@clack/prompts';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import { Keychain } from './keychain';
-
-// ── Provider + Model catalog ────────────────────────────────────────────────
-const PROVIDERS = {
-  anthropic: {
-    label: 'Anthropic (Claude)',
-    hint: 'claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5',
-    models: [
-      { value: 'claude-opus-4-6',   label: 'Claude Opus 4.6',   hint: 'Most capable, highest cost' },
-      { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',  hint: 'Fast + smart — recommended' },
-      { value: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',   hint: 'Fastest, lowest cost' },
-    ],
-  },
-  openai: {
-    label: 'OpenAI (GPT)',
-    hint: 'gpt-5, gpt-4o, o3, o3-mini',
-    models: [
-      { value: 'gpt-5',      label: 'GPT-5',       hint: 'Most capable' },
-      { value: 'gpt-4o',     label: 'GPT-4o',      hint: 'Fast + smart — recommended' },
-      { value: 'gpt-4o-mini', label: 'GPT-4o Mini', hint: 'Fastest, lowest cost' },
-      { value: 'o3',         label: 'o3',           hint: 'Reasoning model' },
-      { value: 'o3-mini',    label: 'o3-mini',      hint: 'Fast reasoning' },
-    ],
-  },
-  google: {
-    label: 'Google (Gemini)',
-    hint: 'gemini-2.5-pro, gemini-2.5-flash',
-    models: [
-      { value: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro',   hint: 'Most capable' },
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'Fast — recommended' },
-      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', hint: 'Previous gen, stable' },
-    ],
-  },
-} as const;
-
-type ProviderKey = keyof typeof PROVIDERS | 'local';
+import { PROVIDERS, buildOrchestratorOptions, type ProviderKey } from './setup-wizard-options';
 
 const PRESETS = [
   { value: 'architect',   label: 'Architect',   hint: 'System design, decomposition, trade-offs' },
@@ -156,23 +122,45 @@ export async function runSetupWizard(): Promise<void> {
   p.log.step('Choose your orchestrator — the main agent that routes tasks to your team.');
   p.log.info('Tip: Pick a fast model here. It only routes, not heavy lifting.');
 
-  const mainProvider = configuredProviders[0];
-  const mainModelOptions = mainProvider === 'local'
-    ? ollamaModels.slice(0, 10).map((m, i) => ({
-        value: m, label: m, hint: i === 0 ? 'Recommended' : undefined,
-      }))
-    : PROVIDERS[mainProvider as keyof typeof PROVIDERS].models.map(m => ({
-        value: m.value, label: m.label, hint: m.hint,
-      }));
+  const orchestratorOptions = buildOrchestratorOptions(configuredProviders);
 
-  const mainModel = await p.select({
-    message: `Orchestrator model (${mainProvider}):`,
-    options: mainModelOptions,
+  const orchestratorChoice = await p.select({
+    message: 'Orchestrator:',
+    options: orchestratorOptions,
   });
 
-  if (p.isCancel(mainModel)) {
+  if (p.isCancel(orchestratorChoice)) {
     p.cancel('Setup cancelled.');
     process.exit(0);
+  }
+
+  let mainProvider: ProviderKey | 'none';
+  let mainModel: string;
+
+  if (orchestratorChoice === 'none') {
+    mainProvider = 'none';
+    mainModel = 'none';
+  } else {
+    mainProvider = orchestratorChoice as ProviderKey;
+    const mainModelOptions = mainProvider === 'local'
+      ? ollamaModels.slice(0, 10).map((m, i) => ({
+          value: m, label: m, hint: i === 0 ? 'Recommended' : undefined,
+        }))
+      : PROVIDERS[mainProvider as keyof typeof PROVIDERS].models.map(m => ({
+          value: m.value, label: m.label, hint: m.hint,
+        }));
+
+    const selectedModel = await p.select({
+      message: `Orchestrator model (${mainProvider}):`,
+      options: mainModelOptions,
+    });
+
+    if (p.isCancel(selectedModel)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    mainModel = selectedModel;
   }
 
   // ── Step 4: Configure agent team ────────────────────────────────────────
@@ -349,8 +337,12 @@ Then synthesize all results — cross-reference findings, deduplicate, resolve c
     .map(([id, a]: [string, any]) => `  ${id} → ${a.model} (${a.preset})`)
     .join('\n');
 
+  const orchestratorSummary = mainProvider === 'none'
+    ? 'native host (no API LLM)'
+    : `${mainModel} (${mainProvider})`;
+
   p.note(
-    `Orchestrator: ${mainModel} (${mainProvider})\n\nTeam (${agentCount} agent${agentCount > 1 ? 's' : ''}):\n${summary}`,
+    `Orchestrator: ${orchestratorSummary}\n\nTeam (${agentCount} agent${agentCount > 1 ? 's' : ''}):\n${summary}`,
     'Your Setup'
   );
 
