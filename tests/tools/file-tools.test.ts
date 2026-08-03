@@ -233,6 +233,52 @@ describe('FileTools', () => {
       expect(result).toBe('No matches found');
     });
 
+    // #712 — a `path` pointing at a FILE used to hit `grepDir`, whose `readdir`
+    // ENOTDIR was swallowed by a bare catch, so every such call returned
+    // "No matches found" regardless of content — a false negative for
+    // cross-reviewers grepping a specific cited file.
+    it('greps a single file when path points at a file (#712)', async () => {
+      const result = await fileTools.fileGrep({ pattern: 'hello', path: 'src/index.ts' });
+      expect(result).not.toBe('No matches found');
+      expect(result).toContain('index.ts');
+      expect(result).toContain('hello');
+      expect(result).toMatch(/index\.ts:1: /);
+    });
+
+    it('does not leak matches from sibling files when path is a single file (#712)', async () => {
+      // `export` appears in both src/index.ts and src/utils.ts — targeting one
+      // file must report only that file.
+      const result = await fileTools.fileGrep({ pattern: 'export', path: 'src/index.ts' });
+      expect(result).toContain('index.ts');
+      expect(result).not.toContain('utils.ts');
+    });
+
+    it('returns no matches message for a file path with no match (#712)', async () => {
+      const result = await fileTools.fileGrep({
+        pattern: 'NONEXISTENT_UNIQUE_STRING_XYZ',
+        path: 'src/index.ts',
+      });
+      expect(result).toBe('No matches found');
+    });
+
+    it('leaves directory-path behavior unchanged (#712)', async () => {
+      const result = await fileTools.fileGrep({ pattern: 'export', path: 'src' });
+      expect(result).toContain('index.ts');
+      expect(result).toContain('utils.ts');
+    });
+
+    it('preserves existing behavior for a nonexistent in-root path (#712)', async () => {
+      // validatePath resolves via the deepest-existing-ancestor walk, so this
+      // does not throw; the target simply cannot be stat'd and yields no matches.
+      const result = await fileTools.fileGrep({ pattern: 'export', path: 'src/no-such-file.ts' });
+      expect(result).toBe('No matches found');
+    });
+
+    it('preserves the outside-root error for a path escaping the sandbox (#712)', async () => {
+      await expect(fileTools.fileGrep({ pattern: 'export', path: '/etc' }))
+        .rejects.toThrow(/outside project root/);
+    });
+
     it('completes promptly for a pathological ReDoS pattern against a long line', async () => {
       // (a+)+$ causes catastrophic backtracking in JS RegExp against a long non-matching
       // string. With RE2's linear-time engine this resolves in microseconds.
@@ -329,6 +375,26 @@ describe('FileTools', () => {
       // Pattern ^x+$ would match if the file were read — but it's skipped due to size.
       const result = await bigOnlyTools.fileGrep({ pattern: '^x+$' });
       expect(result).toBe('No matches found');
+    }, 10_000);
+
+    it('(b-file-target) an over-size file targeted DIRECTLY is still size-skipped (#712)', async () => {
+      // Single-file targeting must honor MAX_GREP_FILE_BYTES exactly as the walk
+      // does — the cap is a resource guard, not a walk-only artifact.
+      const result = await capTools.fileGrep({ pattern: '^x+$', path: 'data/big-file.txt' });
+      expect(result).toBe('No matches found');
+    }, 10_000);
+
+    it('(b-file-target-under) an under-size file targeted DIRECTLY is scanned (#712)', async () => {
+      const result = await capTools.fileGrep({ pattern: '^x+$', path: 'data/under-size.txt' });
+      expect(result).toContain('under-size.txt');
+      expect(result).not.toContain('truncated');
+    }, 10_000);
+
+    it('(a-file-target) match cap + truncation notice apply to a single-file target (#712)', async () => {
+      const result = await capTools.fileGrep({ pattern: '^LINE', path: 'data/many-lines.txt' });
+      const lines = result.split('\n');
+      expect(lines[lines.length - 1]).toContain('truncated');
+      expect(lines).toHaveLength(MAX_GREP_MATCHES + 1);
     }, 10_000);
 
     it('(b-walk) size-skip does not break the broader walk', async () => {

@@ -131,7 +131,21 @@ export class FileTools {
       return `Invalid regex pattern: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
     const state: GrepState = { matches: [], filesScanned: 0, truncated: false };
-    await this.grepDir(searchRoot, regex, state, 0, 10);
+    // Dispatch on the target's type (#712). `grepDir` calls `readdir`, whose
+    // ENOTDIR is swallowed by its bare catch — so grepping a cited FILE used to
+    // return "No matches found" regardless of content, a false-negative
+    // generator for cross-reviewers verifying a specific file. A target that
+    // cannot be stat'd (e.g. a non-existent in-root path) falls through to the
+    // walk, preserving the previous error behavior exactly.
+    let targetInfo;
+    try {
+      targetInfo = await stat(searchRoot);
+    } catch { /* unreadable target — keep the pre-existing walk behavior */ }
+    if (targetInfo?.isFile()) {
+      await this.grepFile(searchRoot, targetInfo.size, regex, state);
+    } else {
+      await this.grepDir(searchRoot, regex, state, 0, 10);
+    }
     let output = state.matches.join('\n') || 'No matches found';
     if (state.truncated) {
       output += '\n... (truncated — result or scan limit reached; narrow your pattern/path)';
@@ -216,34 +230,46 @@ export class FileTools {
       if (info.isDirectory()) {
         await this.grepDir(fullPath, regex, state, depth + 1, maxDepth);
       } else {
-        if (info.size > MAX_GREP_FILE_BYTES) {
-          // Size-skipped files count toward the file cap but mark truncated
-          // only when the file cap is exceeded; size-skip alone is silent
-          // (caller sees no matches for that file, which is correct behavior).
-          continue;
-        }
-        state.filesScanned++;
-        if (state.filesScanned > MAX_GREP_FILES) {
+        await this.grepFile(fullPath, info.size, regex, state);
+        // grepFile sets `truncated` on file-cap exhaustion; the loop head above
+        // returns on the next iteration, matching the previous early return.
+      }
+    }
+  }
+
+  /**
+   * Grep a single file into `state`, honoring MAX_GREP_FILE_BYTES /
+   * MAX_GREP_FILES / MAX_GREP_MATCHES and the `path:line: content` output
+   * format. Shared by the directory walk and the single-file `fileGrep`
+   * target (#712) so both obey identical cap semantics.
+   */
+  private async grepFile(fullPath: string, size: number, regex: RegExp, state: GrepState): Promise<void> {
+    if (size > MAX_GREP_FILE_BYTES) {
+      // Size-skipped files count toward the file cap but mark truncated
+      // only when the file cap is exceeded; size-skip alone is silent
+      // (caller sees no matches for that file, which is correct behavior).
+      return;
+    }
+    state.filesScanned++;
+    if (state.filesScanned > MAX_GREP_FILES) {
+      state.truncated = true;
+      return;
+    }
+    try {
+      const content = await readFile(fullPath, 'utf-8');
+      const lines = content.split('\n');
+      const relPath = relative(this.sandbox.projectRoot, fullPath);
+      for (let idx = 0; idx < lines.length; idx++) {
+        if (state.matches.length >= MAX_GREP_MATCHES) {
           state.truncated = true;
-          return;
+          break;
         }
-        try {
-          const content = await readFile(fullPath, 'utf-8');
-          const lines = content.split('\n');
-          const relPath = relative(this.sandbox.projectRoot, fullPath);
-          for (let idx = 0; idx < lines.length; idx++) {
-            if (state.matches.length >= MAX_GREP_MATCHES) {
-              state.truncated = true;
-              break;
-            }
-            if (regex.test(lines[idx])) {
-              state.matches.push(`${relPath}:${idx + 1}: ${lines[idx]}`);
-            }
-          }
-        } catch {
-          // Skip binary or unreadable files
+        if (regex.test(lines[idx])) {
+          state.matches.push(`${relPath}:${idx + 1}: ${lines[idx]}`);
         }
       }
+    } catch {
+      // Skip binary or unreadable files
     }
   }
 
