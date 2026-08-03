@@ -308,7 +308,14 @@ function categoryBoost(skillCategory: string | undefined, categories: string[]):
  * Resolution order per skill:
  * 1. Agent's local skills: .gossip/agents/<id>/skills/
  * 2. Project skills: .gossip/skills/
- * 3. Default skills: packages/orchestrator/src/default-skills/
+ * 3. Claude Code project skills: .claude/skills/<name>/SKILL.md (#698 part 3)
+ * 4. Default skills: packages/orchestrator/src/default-skills/
+ *
+ * Note that (3) is reachable from this function only for a skill that is
+ * already on the agent's roster — `effectiveSkills` below is the index-enabled
+ * set or the config.json list, never a filesystem walk. A `.claude/skills`
+ * entry has neither, so in practice the bridge serves the on-demand fetch
+ * paths (`resolveServableSkill`) rather than dispatch-time injection.
  *
  * Permanent skills are always loaded. Contextual skills require MIN_KEYWORD_HITS
  * (word-boundary match) against the task string, capped at MAX_CONTEXTUAL_SKILLS.
@@ -699,10 +706,11 @@ export function resolveSkill(
   // Sanitize agentId to prevent path traversal
   if (!SAFE_AGENT_ID.test(agentId)) return null;
 
-  const bases = [
-    resolve(projectRoot, '.gossip', 'agents', agentId, 'skills'),
-    resolve(projectRoot, '.gossip', 'skills'),
-    resolve(__dirname, 'default-skills'),
+  const bases: SkillBase[] = [
+    { dir: resolve(projectRoot, '.gossip', 'agents', agentId, 'skills'), layout: 'flat' },
+    { dir: resolve(projectRoot, '.gossip', 'skills'), layout: 'flat' },
+    claudeCodeSkillsBase(projectRoot),
+    { dir: resolve(__dirname, 'default-skills'), layout: 'flat' },
   ];
 
   return resolveSkillFromBases(bases, skill);
@@ -720,26 +728,76 @@ export function resolveSharedSkill(
   skill: string,
   projectRoot: string,
 ): { content: string; path: string } | null {
-  const bases = [
-    resolve(projectRoot, '.gossip', 'skills'),
-    resolve(__dirname, 'default-skills'),
+  const bases: SkillBase[] = [
+    { dir: resolve(projectRoot, '.gossip', 'skills'), layout: 'flat' },
+    claudeCodeSkillsBase(projectRoot),
+    { dir: resolve(__dirname, 'default-skills'), layout: 'flat' },
   ];
 
   return resolveSkillFromBases(bases, skill);
 }
 
+/**
+ * One entry in a resolution chain: a directory plus the on-disk layout of skill
+ * files inside it.
+ *
+ * - `flat` — `<dir>/<name>.md`. Every gossipcat-native base (agent-local,
+ *   project-wide `.gossip/skills`, bundled `default-skills`).
+ * - `directory` — `<dir>/<name>/SKILL.md`. The Claude Code project-skill layout
+ *   (`.claude/skills/<name>/SKILL.md`), which is a directory per skill so the
+ *   skill can ship supporting files alongside `SKILL.md`.
+ *
+ * Carrying the layout on the base descriptor (rather than special-casing the
+ * `.claude` path inside the walk) keeps ONE containment check and ONE read
+ * path for every base — the traversal guard cannot drift between layouts.
+ */
+interface SkillBase {
+  dir: string;
+  layout: 'flat' | 'directory';
+}
+
+/**
+ * Read-only bridge to Claude Code project skills (issue #698 part 3).
+ *
+ * A user-authored `.claude/skills/<name>/SKILL.md` becomes fetchable by
+ * gossipcat agents (`gossip_skills(action: "get")`, `skill_query`,
+ * `gossip_skill_query`) without hand-duplicating it into `.gossip/skills`.
+ *
+ * PRECEDENCE: this base sits AFTER project-wide `.gossip/skills` and BEFORE
+ * bundled `default-skills`. So a name present in both `.gossip/skills/<n>.md`
+ * and `.claude/skills/<n>/SKILL.md` resolves to the `.gossip` copy — gossipcat-
+ * native content stays authoritative, and a Claude Code skill can never shadow
+ * a skill the effectiveness pipeline manages. It CAN shadow a bundled default,
+ * which is the same override power `.gossip/skills` already has.
+ *
+ * PULL-ONLY: these skills have no skill-index slot and no config.json roster
+ * entry, so `loadSkills` never iterates them (it walks `resolveEffectiveSkills`,
+ * i.e. the index-enabled set or the config list — never the filesystem). The
+ * bridge therefore changes on-demand resolution only, never dispatch-time
+ * injection eligibility.
+ */
+function claudeCodeSkillsBase(projectRoot: string): SkillBase {
+  return { dir: resolve(projectRoot, '.claude', 'skills'), layout: 'directory' };
+}
+
 /** Shared resolution walk used by {@link resolveSkill} and {@link resolveSharedSkill}. */
 function resolveSkillFromBases(
-  bases: string[],
+  bases: SkillBase[],
   skill: string,
 ): { content: string; path: string } | null {
   // Use canonical normalization for skill name (consistent with SkillIndex)
   const normalized = normalizeSkillName(skill);
   if (!normalized) return null;
-  const filename = `${normalized}.md`;
 
-  for (const base of bases) {
-    const candidate = resolve(base, filename);
+  for (const { dir: base, layout } of bases) {
+    // `normalized` is [a-z0-9-] only (normalizeSkillName strips everything
+    // else, `.` and `/` included), so neither layout can synthesize a `..`
+    // segment. The containment check below is the second, structural gate and
+    // is deliberately IDENTICAL for both layouts.
+    const relative = layout === 'directory'
+      ? `${normalized}${sep}SKILL.md`
+      : `${normalized}.md`;
+    const candidate = resolve(base, relative);
     // Validate resolved path stays within base directory
     if (!candidate.startsWith(base + sep)) continue;
     if (existsSync(candidate)) {
@@ -917,6 +975,18 @@ export function listAvailableSkills(agentId: string, projectRoot: string): strin
   if (existsSync(projectDir)) {
     for (const f of readdirSync(projectDir)) {
       if (f.endsWith('.md')) skills.add(f.replace('.md', ''));
+    }
+  }
+
+  // Claude Code project skills (#698 part 3). Directory-per-skill layout, so a
+  // name counts only when `<name>/SKILL.md` exists — that single probe also
+  // filters loose files and empty subdirectories, and unlike a Dirent type test
+  // it still sees a symlinked skill directory. Names are reported as authored;
+  // resolveSkill normalizes on lookup.
+  const claudeDir = claudeCodeSkillsBase(projectRoot).dir;
+  if (existsSync(claudeDir)) {
+    for (const entry of readdirSync(claudeDir)) {
+      if (existsSync(resolve(claudeDir, entry, 'SKILL.md'))) skills.add(entry);
     }
   }
 
