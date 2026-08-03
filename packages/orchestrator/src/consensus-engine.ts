@@ -86,12 +86,23 @@ export const CROSS_REVIEW_MEMORY_DIRECTIVE = `MEMORY (optional, verification-sco
 - FORBIDDEN: substituting a recalled verdict for fresh verification against the code. A recalled verdict is NOT evidence — "I confirmed this last cycle" must NEVER produce an AGREE. Re-verify every round.
 - If memory informed your verdict, make it traceable: cite \`per gossip_remember finding <id>\` inline.`;
 
-const VERIFIER_TOOLS: ToolDefinition[] = [
+/**
+ * Read-only tools offered to engine-driven Phase-2 cross-reviewers.
+ *
+ * `skill_query` (issue #728) is the Phase-2 twin of the relay worker tool of
+ * the same name: without it a reviewer keeps whatever skills the #666 gate
+ * injected and can pull nothing else, so an agent loses its specialty the
+ * moment it switches into cross-review. Resolution, quarantine and the byte
+ * cap all live in the runner (`buildVerifierToolRunner`), which routes through
+ * the SAME `resolveServableSkill` predicate the relay tool uses.
+ */
+export const VERIFIER_TOOLS: ToolDefinition[] = [
   { name: 'file_read', description: 'Read file contents', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Absolute or project-relative file path' }, startLine: { type: 'number', description: 'First line to read (1-based)' }, endLine: { type: 'number', description: 'Last line to read (inclusive)' } }, required: ['path'] } },
   { name: 'file_grep', description: 'Search file contents by regex', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Regex pattern to search for' }, path: { type: 'string', description: 'Directory or file to search in' }, maxResults: { type: 'number', description: 'Maximum number of results to return' } }, required: ['pattern'] } },
   { name: 'file_search', description: 'Find files by glob pattern', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern to match files' }, path: { type: 'string', description: 'Root directory to search from' } }, required: ['pattern'] } },
   { name: 'memory_query', description: 'Search agent memory by keyword', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Keyword or phrase to search memory' } }, required: ['query'] } },
   { name: 'git_log', description: 'Show git log for a file or path', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File or directory to show history for' }, maxCount: { type: 'number', description: 'Maximum number of commits to return' } }, required: [] } },
+  { name: 'skill_query', description: 'Fetch the full markdown of ONE of YOUR OWN bound skills that was not injected into this cross-review. Read-only — it never binds, unbinds, or changes your skill set. Budget: 2 calls per cross-review round.', parameters: { type: 'object', properties: { skill: { type: 'string', description: 'Exact skill name (e.g. "trust-boundaries"). Underscores and casing are normalized.' } }, required: ['skill'] } },
 ];
 
 /**
