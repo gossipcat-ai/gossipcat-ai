@@ -110,7 +110,14 @@ export function rewriteKeywordsFrontmatter(raw: string, keywords: readonly strin
   }
 
   // Block sequence: `keywords:` on its own line followed by `- item` lines.
-  const seq = block.match(/^(\s*)keywords:[ \t]*\n((?:[ \t]*-[ \t]*.*\n?)+)/m);
+  // The item pattern must be no more permissive than the parser's
+  // (skill-parser.ts: `/^\s*-\s(.*)$/`), which requires whitespace after the
+  // dash and RESETS block context on the first line that fails. Hence
+  // `-[ \t]`, not `-[ \t]*`: a bare `-item` is not a sequence item, so it and
+  // everything after it are outside the region the parser read and must be
+  // left byte-identical. `.` never crosses a newline, so the `+` already stops
+  // at the first non-matching line — matching the parser's reset (#705).
+  const seq = block.match(/^(\s*)keywords:[ \t]*\n((?:[ \t]*-[ \t].*\n?)+)/m);
   if (seq) {
     const indent = seq[1];
     const itemIndent = seq[2].match(/^([ \t]*)-/)?.[1] ?? `${indent}  `;
