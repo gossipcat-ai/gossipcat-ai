@@ -176,7 +176,13 @@ describe('verifier tool runner — resolutionRoots anchoring (#710)', () => {
       expect(out).toBe('No matches found');
     });
 
-    it('resolveToolPath returns in-root citations untouched', async () => {
+    // #711 — the as-is short-circuit must require the resolved file to EXIST.
+    // `Sandbox.validatePath` walks up to the deepest existing ancestor, so it
+    // succeeds for any non-escaping relative path; without an existence check a
+    // bare-filename citation returned as-is and the search branch below was
+    // unreachable for in-root relative citations.
+    it('resolveToolPath returns an EXISTING in-root citation untouched, without hitting file_search', async () => {
+      const searchSpy = jest.spyOn(fileTools, 'fileSearch');
       const access = buildVerifierFileAccess({
         fileTools,
         projectRoot,
@@ -184,6 +190,31 @@ describe('verifier tool runner — resolutionRoots anchoring (#710)', () => {
         log: noopLog,
       });
       expect(await access.resolveToolPath('src/target.ts')).toBe('src/target.ts');
+      expect(searchSpy).not.toHaveBeenCalled();
+      searchSpy.mockRestore();
+    });
+
+    it('resolveToolPath resolves a bare filename of a nested file via file_search (#711)', async () => {
+      const access = buildVerifierFileAccess({
+        fileTools,
+        projectRoot,
+        effectiveRoots: [],
+        log: noopLog,
+      });
+      // `target.ts` does NOT exist at the project root — only at `src/target.ts`.
+      expect(await access.resolveToolPath('target.ts')).toBe('src/target.ts');
+    });
+
+    it('resolveToolPath returns the original when a bare filename matches nothing (#711)', async () => {
+      const access = buildVerifierFileAccess({
+        fileTools,
+        projectRoot,
+        effectiveRoots: [],
+        log: noopLog,
+      });
+      // No match anywhere → hand the citation back so file_read emits its own
+      // clear "File not found" error rather than a silent substitution.
+      expect(await access.resolveToolPath('no-such-file-anywhere.ts')).toBe('no-such-file-anywhere.ts');
     });
 
     it('short-name resolution still falls back to file_search', async () => {
