@@ -216,7 +216,7 @@ export class QuotaExhaustedException extends Error {
   }
 }
 
-type CooldownReason = 'quota' | 'unavailable' | 'spend_cap';
+type CooldownReason = 'quota' | 'unavailable' | 'spend_cap' | 'no_quota';
 
 // A monthly spend cap (Google) cannot recover via a short rate-limit cooldown —
 // it clears only when the user raises the cap or the billing month rolls over.
@@ -224,6 +224,19 @@ type CooldownReason = 'quota' | 'unavailable' | 'spend_cap';
 // stops lying about "OK" the instant a short cooldown would have expired.
 const SPEND_CAP_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SPEND_CAP_RE = /spend(?:ing)?\s+cap/i;
+
+// A free-tier key with a zero request/token limit for the model (issue #732)
+// is a PERMANENT no-quota state, not a transient rate limit — waiting never
+// clears it, only enabling billing does. Detect it from the structured
+// violation text Google embeds in the error body: a "Quota exceeded ...
+// limit: 0" line on the SAME line (bounded by `[^\n]*` so it can't match
+// across unrelated content), or a `"quotaId"` field whose value carries
+// Google's "-FreeTier" suffix. Both anchors require the zero-limit / FreeTier
+// signal to sit next to the quota-violation vocabulary, so ordinary 429s with
+// non-zero limits (e.g. "limit: 100") or unrelated zeros elsewhere in the
+// body never match. Same 24h re-armed cooldown pattern as spend_cap.
+const NO_QUOTA_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const NO_QUOTA_RE = /Quota exceeded[^\n]*\blimit:\s*0\b|"quotaId"\s*:\s*"[^"]*-FreeTier"/i;
 
 interface QuotaProviderState {
   exhaustedUntil: number;
@@ -280,6 +293,7 @@ class QuotaTracker {
       const label =
         this.reason === 'unavailable' ? 'service unavailable'
         : this.reason === 'spend_cap' ? 'monthly spend cap reached'
+        : this.reason === 'no_quota' ? 'no quota on current plan'
         : 'quota exhausted';
       _log(this.provider, `${label}, ${Math.round(remainingMs / 1000)}s cooldown remaining`);
       throw new QuotaExhaustedException({
@@ -307,6 +321,24 @@ class QuotaTracker {
       _log(this.provider, `429 monthly spend cap (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
       throw new QuotaExhaustedException({
         message: `${this.provider} monthly spend cap reached (429 #${this.consecutive429s}): ${errBody}`,
+        provider: this.provider,
+        retryAfterMs: cooldownMs,
+      });
+    }
+    // A zero-limit free-tier 429 (issue #732) is checked AFTER spend_cap
+    // (spend_cap implies billing is already enabled, so the two are mutually
+    // exclusive in practice) and BEFORE the ordinary quota path — it must not
+    // fall through to the short exponential-backoff cooldown, since waiting
+    // never clears a zero-limit plan.
+    const isNoQuota = NO_QUOTA_RE.test(errBody);
+    if (isNoQuota) {
+      this.reason = 'no_quota';
+      const cooldownMs = NO_QUOTA_COOLDOWN_MS;
+      this.exhaustedUntil = Date.now() + cooldownMs;
+      this.persist();
+      _log(this.provider, `429 zero quota on current plan (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
+      throw new QuotaExhaustedException({
+        message: `${this.provider} has zero quota for this model on the current (free-tier) plan (429 #${this.consecutive429s}): enabling billing is the only fix, waiting will not help: ${errBody}`,
         provider: this.provider,
         retryAfterMs: cooldownMs,
       });

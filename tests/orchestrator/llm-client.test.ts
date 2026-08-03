@@ -1130,3 +1130,193 @@ describe('QuotaTracker spend-cap detection (429)', () => {
     expect(Number.isNaN(state.consecutive429s)).toBe(false);
   });
 });
+
+describe('QuotaTracker no-quota detection (429, issue #732)', () => {
+  let projectRoot: string;
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'quota-no-quota-'));
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  const read429State = () =>
+    JSON.parse(readFileSync(join(projectRoot, '.gossip', 'quota-state.json'), 'utf-8')).google;
+
+  // Realistic shape of a Google free-tier zero-limit 429: the "message" field
+  // itself carries "Quota exceeded for metric: ..., limit: 0, model: ..."
+  // violation lines, and the structured `details` array carries a `quotaId`
+  // ending in "-FreeTier".
+  const ZERO_LIMIT_BODY = JSON.stringify({
+    error: {
+      code: 429,
+      message:
+        'You exceeded your current quota. * Quota exceeded for metric: ' +
+        'generativelanguage.googleapis.com/generate_content_free_tier_requests, ' +
+        'limit: 0, model: gemini-2.5-pro',
+      status: 'RESOURCE_EXHAUSTED',
+      details: [
+        {
+          '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+          violations: [
+            {
+              quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests',
+              quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+              quotaDimensions: { model: 'gemini-2.5-pro', location: 'global' },
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  it('a zero-limit free-tier 429 persists reason "no_quota" with a 24h cooldown and a billing-focused message', async () => {
+    const before = Date.now();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '30']]) as any, // short header must be IGNORED, same as spend_cap
+      text: async () => ZERO_LIMIT_BODY,
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/zero quota.*free-tier.*enabling billing is the only fix/is);
+
+    const state = read429State();
+    expect(state.reason).toBe('no_quota');
+    expect(state.consecutive429s).toBe(1);
+    const remaining = state.exhaustedUntil - before;
+    expect(remaining).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(remaining).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5_000);
+  });
+
+  it('an ordinary 429 with a NON-zero limit does not match no_quota — stays on the exponential quota path (regression guard)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '45']]) as any,
+      text: async () =>
+        JSON.stringify({
+          error: {
+            code: 429,
+            message: 'Quota exceeded for metric: generate_requests_per_minute, limit: 100, model: gemini-2.5-pro',
+            status: 'RESOURCE_EXHAUSTED',
+          },
+        }),
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+
+    expect(read429State().reason).toBe('quota');
+  });
+
+  it('a plain ordinary 429 with an unrelated zero elsewhere in the body does not false-positive (regression guard)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '20']]) as any,
+      text: async () => 'Resource has been exhausted (e.g. check quota). retryDelay: 0s',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+
+    expect(read429State().reason).toBe('quota');
+  });
+
+  it('a body matching BOTH spend_cap and the zero-limit shape resolves to spend_cap (pins precedence: spend_cap checked first)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () =>
+        'You exceeded your monthly spending cap. Quota exceeded for metric: ' +
+        'generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/monthly spend cap/i);
+
+    expect(read429State().reason).toBe('spend_cap');
+  });
+
+  it('re-arm: a second no_quota 429 after partial elapse re-arms the full 24h window from now', async () => {
+    // Simulate a prior no_quota cooldown that has ALREADY expired (so
+    // checkBeforeRequest lets the next request through), with a
+    // consecutive429s count carried over from before.
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({ google: { exhaustedUntil: Date.now() - 1000, consecutive429s: 3, reason: 'no_quota' } }),
+    );
+
+    const before = Date.now();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () => ZERO_LIMIT_BODY,
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/zero quota/i);
+
+    const state = read429State();
+    expect(state.reason).toBe('no_quota');
+    expect(state.consecutive429s).toBe(4); // carried-over 3 + this one
+    const remaining = state.exhaustedUntil - before;
+    // Freshly re-armed to a full 24h window from NOW, not extended off the
+    // stale (already-expired) prior deadline.
+    expect(remaining).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(remaining).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5_000);
+  });
+
+  it('checkBeforeRequest labels a cooling no_quota state as "no quota on current plan"', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () => ZERO_LIMIT_BODY,
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }])).rejects.toThrow();
+
+    // Second call while still cooling hits checkBeforeRequest, not handle429.
+    await expect(provider.generate([{ role: 'user', content: 'hi again' }]))
+      .rejects.toThrow(/no quota on current plan/i);
+  });
+
+  it('a successful call after a no_quota cooldown resets reason to "quota" and clears the cooldown', async () => {
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({ google: { exhaustedUntil: Date.now() - 1000, consecutive429s: 2, reason: 'no_quota' } }),
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: 'hi' }] }, finishReason: 'STOP' }] }),
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-2.5-pro', projectRoot);
+    await provider.generate([{ role: 'user', content: 'hi' }]);
+
+    const state = read429State();
+    expect(state.reason).toBe('quota');
+    expect(state.consecutive429s).toBe(0);
+    expect(state.exhaustedUntil).toBe(0);
+  });
+});
