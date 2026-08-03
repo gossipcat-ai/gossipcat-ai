@@ -49,13 +49,11 @@ gossip_run(agent_id: "<id>", task: "Implement X")
 ## Available Agents
 - sonnet-reviewer: anthropic/claude-sonnet-4-6 (custom) — native
 - haiku-researcher: anthropic/claude-haiku-4-5 (custom) — native
-- gemini-reviewer: google/gemini-2.5-pro (reviewer)
-- gemini-tester: google/gemini-2.5-pro (tester)
 - sonnet-implementer: anthropic/claude-sonnet-4-6 (custom) — native
 - opus-implementer: anthropic/claude-opus-4-6 (custom) — native
 - sonnet-designer: anthropic/claude-sonnet-4-6 (custom) — native
 - fable-reviewer: anthropic/claude-fable-5 (custom) — native
-- deepseek-challenger: deepseek/deepseek-chat (custom)
+- deepseek-challenger: deepseek/deepseek-v4-pro (custom)
 
 ### Implementer naming convention
 
