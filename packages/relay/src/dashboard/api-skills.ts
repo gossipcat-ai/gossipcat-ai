@@ -38,10 +38,6 @@ const DEFAULT_THRESHOLD = 0.7;
  *  amortize the jsonl scan across the 5s dashboard poll. */
 const CACHE_TTL_MS = 60_000;
 
-function isCorrupt(projectRoot: string, index: SkillIndex): boolean {
-  return existsSync(join(projectRoot, '.gossip', 'skill-index.json')) && !index.exists();
-}
-
 /* ── frontmatter (status + bound_at + passed_baseline_rate + provenance) ── */
 
 interface SkillFrontmatter {
@@ -352,7 +348,7 @@ export async function skillsBindHandler(projectRoot: string, body: SkillsBindReq
   if (!body.skill || typeof body.skill !== 'string' || !AGENT_ID_RE.test(body.skill)) return { success: false, error: 'Invalid skill name' };
   try {
     const index = new SkillIndex(projectRoot);
-    if (isCorrupt(projectRoot, index)) {
+    if (index.isCorrupt()) {
       return { success: false, error: 'Could not parse skill-index.json' };
     }
     if (body.enabled) {

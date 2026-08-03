@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { normalizeSkillName } from './skill-name';
 
@@ -27,12 +27,23 @@ export type SkillIndexData = Record<string, Record<string, SkillSlot>>;
  * - Shared skills, per-agent binding
  *
  * Persists to `.gossip/skill-index.json`.
+ *
+ * **Cross-process safety.** The MCP server holds one long-lived instance while
+ * the dashboard and migration scripts write the same file from other processes.
+ * Every public read/mutate re-reads the file when its `mtimeMs`/`size` changed
+ * since our last load or save, and every write lands via temp-file + rename.
+ * Mutators are fully synchronous from refresh through save, so the lost-update
+ * window is closed for this single-machine system. No locking, by design.
  */
 export class SkillIndex {
   private data: SkillIndexData = {};
   private readonly filePath: string;
   private dirty = false;
   private _exists = false;
+  private _corrupt = false;
+  /** File identity as of our last successful load or save; -1 when unknown. */
+  private seenMtimeMs = -1;
+  private seenSize = -1;
 
   constructor(projectRoot: string) {
     this.filePath = join(projectRoot, '.gossip', 'skill-index.json');
@@ -41,6 +52,7 @@ export class SkillIndex {
 
   /** Bind a skill to an agent (creates or updates the slot) */
   bind(agentId: string, skill: string, options?: { enabled?: boolean; source?: SkillSlot['source']; mode?: SkillSlot['mode'] }): SkillSlot {
+    this.refreshIfChanged();
     this.validateAgentId(agentId);
     const name = this.validateSkillName(skill);
     if (!this.data[agentId]) this.data[agentId] = Object.create(null);
@@ -64,6 +76,7 @@ export class SkillIndex {
 
   /** Unbind a skill from an agent (removes the slot entirely) */
   unbind(agentId: string, skill: string): boolean {
+    this.refreshIfChanged();
     this.validateAgentId(agentId);
     const name = normalizeSkillName(skill);
     if (!this.data[agentId]?.[name]) return false;
@@ -77,6 +90,7 @@ export class SkillIndex {
 
   /** Enable a previously disabled skill slot */
   enable(agentId: string, skill: string): boolean {
+    this.refreshIfChanged();
     this.validateAgentId(agentId);
     const slot = this.resolveSlot(agentId, skill);
     if (!slot) return false;
@@ -89,6 +103,7 @@ export class SkillIndex {
 
   /** Disable a skill slot without removing it */
   disable(agentId: string, skill: string): boolean {
+    this.refreshIfChanged();
     this.validateAgentId(agentId);
     const slot = this.resolveSlot(agentId, skill);
     if (!slot) return false;
@@ -117,6 +132,7 @@ export class SkillIndex {
 
   /** Get all enabled skill names for an agent */
   getEnabledSkills(agentId: string): string[] {
+    this.refreshIfChanged();
     const agentSlots = this.data[agentId];
     if (!agentSlots) return [];
     return Object.values(agentSlots)
@@ -126,6 +142,7 @@ export class SkillIndex {
 
   /** Get all slots for an agent (enabled and disabled) — returns copies */
   getAgentSlots(agentId: string): SkillSlot[] {
+    this.refreshIfChanged();
     const agentSlots = this.data[agentId];
     if (!agentSlots) return [];
     return Object.values(agentSlots).map(s => ({ ...s }));
@@ -133,23 +150,29 @@ export class SkillIndex {
 
   /** Get a specific slot — returns a copy */
   getSlot(agentId: string, skill: string): SkillSlot | undefined {
+    this.refreshIfChanged();
     const slot = this.data[agentId]?.[normalizeSkillName(skill)];
     return slot ? { ...slot } : undefined;
   }
 
   /** Get the full index data — returns a deep copy */
   getIndex(): SkillIndexData {
+    this.refreshIfChanged();
     return JSON.parse(JSON.stringify(this.data));
   }
 
   /** Get the mode for a specific skill slot */
   getSkillMode(agentId: string, skill: string): 'permanent' | 'contextual' {
+    this.refreshIfChanged();
     const slot = this.data[agentId]?.[normalizeSkillName(skill)];
     return slot?.mode ?? 'permanent';
   }
 
   /** Get all agent IDs in the index */
-  getAgentIds(): string[] { return Object.keys(this.data); }
+  getAgentIds(): string[] {
+    this.refreshIfChanged();
+    return Object.keys(this.data);
+  }
 
   /**
    * Drop entries for agents not in `validAgentIds`. Returns the list of
@@ -165,6 +188,7 @@ export class SkillIndex {
    * `.gossip/skill-index.json` file.
    */
   prune(validAgentIds: string[]): string[] {
+    this.refreshIfChanged();
     const valid = new Set<string>();
     for (const id of validAgentIds) {
       if (typeof id === 'string' && id.length > 0 && !DANGEROUS_KEYS.has(id)) {
@@ -186,13 +210,28 @@ export class SkillIndex {
   }
 
   /** Check if an index file exists (for backward compat detection) */
-  exists(): boolean { return this._exists; }
+  exists(): boolean {
+    this.refreshIfChanged();
+    return this._exists;
+  }
+
+  /**
+   * True when an index file was found on disk but could not be used — invalid
+   * JSON (now quarantined) or a non-object shape. Callers that would otherwise
+   * overwrite the file can refuse and surface the problem instead. Cleared once
+   * a good index is loaded or written.
+   */
+  isCorrupt(): boolean {
+    this.refreshIfChanged();
+    return this._corrupt;
+  }
 
   /**
    * Seed index from agent configs — call once on first load when no index file exists.
    * Imports existing config.skills[] as 'config' source slots.
    */
   seedFromConfigs(agents: Array<{ id: string; skills: string[] }>): void {
+    this.refreshIfChanged();
     for (const agent of agents) {
       if (DANGEROUS_KEYS.has(agent.id) || !agent.id) continue;
       if (!this.data[agent.id]) this.data[agent.id] = Object.create(null);
@@ -243,6 +282,7 @@ export class SkillIndex {
     agentIds: string[],
     mode: 'permanent' | 'contextual',
   ): void {
+    this.refreshIfChanged();
     let changed = false;
     for (const agentId of agentIds) {
       if (DANGEROUS_KEYS.has(agentId) || !agentId) continue;
@@ -282,38 +322,122 @@ export class SkillIndex {
     return name;
   }
 
-  private load(): void {
+  /** File identity, or null when the file is absent/unreadable. */
+  private statFile(): { mtimeMs: number; size: number } | null {
     try {
-      const raw = readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      // Structural validation: must be a non-null, non-array object
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        // Sanitize: remove prototype-polluting keys from disk JSON
-        for (const key of Object.keys(parsed)) {
-          if (DANGEROUS_KEYS.has(key)) delete parsed[key];
-        }
-        // Backfill mode for existing slots that don't have it
-        for (const agentSlots of Object.values(parsed)) {
-          if (!agentSlots || typeof agentSlots !== 'object') continue;
-          for (const slot of Object.values(agentSlots) as any[]) {
-            if (slot && !slot.mode) {
-              slot.mode = (slot.source === 'auto' || slot.source === 'imported')
-                ? 'contextual' : 'permanent';
-            }
-          }
-        }
-        this.data = parsed as SkillIndexData;
-        this._exists = true;
-      }
-    } catch { /* file doesn't exist or corrupted — start fresh */ }
+      const st = statSync(this.filePath);
+      return { mtimeMs: st.mtimeMs, size: st.size };
+    } catch {
+      return null;
+    }
   }
 
+  private markSeen(): void {
+    const st = this.statFile();
+    this.seenMtimeMs = st ? st.mtimeMs : -1;
+    this.seenSize = st ? st.size : -1;
+  }
+
+  /**
+   * Re-read the file if another process changed it since our last load or save.
+   * A missing file leaves in-memory state alone — same as a fresh construction
+   * against a project that has no index yet.
+   *
+   * Safe to call before any mutation: every mutator saves within the same
+   * synchronous turn it sets `dirty`, so there is never an unsaved edit for a
+   * reload to discard.
+   */
+  private refreshIfChanged(): void {
+    const st = this.statFile();
+    if (!st) return;
+    if (st.mtimeMs === this.seenMtimeMs && st.size === this.seenSize) return;
+    this.load();
+  }
+
+  /**
+   * Move an unparseable index aside so the bad bytes survive for diagnosis,
+   * and say so on stderr. Never throws — a corrupt file must not brick boot.
+   */
+  private quarantineCorruptFile(): void {
+    const backup = `${this.filePath}.corrupt-${Date.now()}`;
+    try {
+      renameSync(this.filePath, backup);
+      process.stderr.write(
+        `[gossipcat] ⚠️  skill-index.json is not valid JSON — moved to ${backup}, starting from an empty index\n`,
+      );
+    } catch {
+      process.stderr.write(
+        `[gossipcat] ⚠️  skill-index.json is not valid JSON and could not be moved aside — starting from an empty index\n`,
+      );
+    }
+  }
+
+  private load(): void {
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath, 'utf-8');
+    } catch {
+      return; // no file yet — start fresh
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      this.quarantineCorruptFile();
+      this.data = {};
+      this._exists = false;
+      this._corrupt = true;
+      this.markSeen();
+      return;
+    }
+
+    this.markSeen();
+    // Structural validation: must be a non-null, non-array object
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      this._corrupt = true;
+      return;
+    }
+
+    // Sanitize: remove prototype-polluting keys from disk JSON
+    for (const key of Object.keys(parsed)) {
+      if (DANGEROUS_KEYS.has(key)) delete parsed[key];
+    }
+    // Backfill mode for existing slots that don't have it
+    for (const agentSlots of Object.values(parsed)) {
+      if (!agentSlots || typeof agentSlots !== 'object') continue;
+      for (const slot of Object.values(agentSlots) as any[]) {
+        if (slot && !slot.mode) {
+          slot.mode = (slot.source === 'auto' || slot.source === 'imported')
+            ? 'contextual' : 'permanent';
+        }
+      }
+    }
+    this.data = parsed as SkillIndexData;
+    this._exists = true;
+    this._corrupt = false;
+  }
+
+  /**
+   * Atomic write: serialize to a sibling temp file, then rename over the
+   * target. A reader in another process sees either the old file or the new
+   * one, never a half-written index.
+   */
   private save(): void {
     if (!this.dirty) return;
     const dir = dirname(this.filePath);
     mkdirSync(dir, { recursive: true }); // idempotent, no TOCTOU
-    writeFileSync(this.filePath, JSON.stringify(this.data, null, 2) + '\n');
+    const tmp = join(dir, `.skill-index.json.${process.pid}.tmp`);
+    writeFileSync(tmp, JSON.stringify(this.data, null, 2) + '\n');
+    try {
+      renameSync(tmp, this.filePath);
+    } catch (err) {
+      try { unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+      throw err;
+    }
     this._exists = true;
+    this._corrupt = false;
     this.dirty = false;
+    this.markSeen();
   }
 }
