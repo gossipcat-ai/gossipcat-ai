@@ -1,0 +1,203 @@
+/**
+ * Verifier tool execution for consensus Phase-2 cross-review.
+ *
+ * Extracted from the inline closure in `collect.ts` so the rooting behavior is
+ * unit-testable (issue #710). Phase-1 relay dispatch already anchors agents at
+ * `resolutionRoots[0]` via `toolServer.assignRoot` (PR #328); Phase 2 did not,
+ * so cross-reviewers read the repo root while the findings under review
+ * described a sibling review worktree — producing confident-but-wrong
+ * refutations ("symbol does not exist", "file only has N lines").
+ *
+ * When `effectiveRoots` is empty every code path here is byte-identical to the
+ * pre-#710 behavior.
+ */
+import { FileTools, GitTools, Sandbox } from '@gossip/tools';
+import type { MemorySearcher } from '@gossip/orchestrator';
+import { existsSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+
+export type VerifierToolRunner = (
+  agentId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+) => Promise<string>;
+
+/** Read-only file access for cross-reviewers, anchored at the review root. */
+export interface VerifierFileAccess {
+  /** Resolve an agent-cited path, preferring the review worktree copy. */
+  resolveToolPath(filePath: string): Promise<string>;
+  fileRead(args: Record<string, unknown>): Promise<string>;
+  fileGrep(args: Record<string, unknown>): Promise<string>;
+}
+
+export interface VerifierFileAccessOptions {
+  fileTools: FileTools;
+  projectRoot: string;
+  /** Validated resolution roots; `[0]` is the review worktree when present. */
+  effectiveRoots: readonly string[];
+  /** Defaults to stderr. Injected in tests to assert observability lines. */
+  log?: (line: string) => void;
+}
+
+export interface VerifierToolRunnerOptions extends VerifierFileAccessOptions {
+  memory: MemorySearcher;
+  /** Reuse an access built by the caller so both Phase-2 tool loops agree. */
+  access?: VerifierFileAccess;
+  /** Injection seam for tests — the ROOT choice is the behavior under test. */
+  makeGitTools?: (root: string) => GitTools;
+}
+
+/**
+ * Canonical form of a root for prefix comparison. Mirrors
+ * `FileTools.rankByResolutionRoots`: on darwin a `/tmp/...` root and a
+ * `/private/tmp/...` resolved path never match without this.
+ */
+function canonicalRoot(path: string): string {
+  const abs = resolve(path);
+  try {
+    return existsSync(abs) ? realpathSync(abs) : abs;
+  } catch {
+    return abs;
+  }
+}
+
+function isInsideRoot(absPath: string, root: string): boolean {
+  return absPath === root || absPath.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): VerifierFileAccess {
+  const { fileTools } = opts;
+  const effectiveRoots = opts.effectiveRoots ?? [];
+  const log = opts.log ?? ((line: string) => { process.stderr.write(line); });
+  const projectRoot = canonicalRoot(opts.projectRoot);
+  const sandbox = new Sandbox(opts.projectRoot);
+  const declaredRoots = effectiveRoots.filter(Boolean).map(canonicalRoot);
+  const reviewRoot: string | undefined = declaredRoots[0];
+
+  /**
+   * Map a cited path onto the review worktree when that copy actually exists.
+   * Returns undefined when there is no review root, when the path already
+   * points inside a declared root, or when the worktree has no such file (the
+   * caller then falls back to project-root resolution).
+   */
+  const remapToReviewRoot = (filePath: string): string | undefined => {
+    if (!reviewRoot) return undefined;
+    let candidate: string;
+    if (isAbsolute(filePath)) {
+      const abs = canonicalRoot(filePath);
+      if (declaredRoots.some(r => isInsideRoot(abs, r))) return undefined;
+      const rel = relative(projectRoot, abs);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) return undefined;
+      candidate = join(reviewRoot, rel);
+    } else {
+      candidate = join(reviewRoot, filePath);
+    }
+    return existsSync(candidate) ? candidate : undefined;
+  };
+
+  /**
+   * Project-root fallback. With a review root declared the tools are anchored
+   * at the worktree, so a project-root file must be handed over as an absolute
+   * path or it would re-resolve against the worktree and vanish.
+   */
+  const asProjectRootPath = (filePath: string): string =>
+    reviewRoot ? resolve(projectRoot, filePath) : filePath;
+
+  // Resolve short file paths (e.g. "cross-reviewer-selection.ts") to full
+  // project-relative paths. LLMs often cite just the filename without the
+  // directory prefix. Disambiguation rules when multiple matches exist:
+  //   1. Prefer the review worktree copy when the file exists there (#710)
+  //   2. Else prefer a match whose absolute path starts with any effectiveRoots entry
+  //   3. Else prefer paths inside projectRoot over paths outside
+  //   4. On ambiguity, emit a stderr warning with the chosen + all candidates
+  const resolveToolPath = async (filePath: string): Promise<string> => {
+    if (!filePath) return filePath;
+    const remapped = remapToReviewRoot(filePath);
+    if (remapped) return remapped;
+    // Try as-is next — if Sandbox validates it, the path is inside the project root.
+    try { sandbox.validatePath(filePath); return asProjectRootPath(filePath); } catch { /* outside root */ }
+    // Search via file_search for the bare filename, passing resolutionRoots so
+    // fileSearch ranks matches inside a resolution root ahead of stray duplicates.
+    const fileName = filePath.split('/').pop() ?? filePath;
+    try {
+      const searchResult = await fileTools.fileSearch({ pattern: fileName, resolutionRoots: effectiveRoots });
+      const candidates = searchResult.split('\n').map(s => s.trim()).filter(s => s && s !== 'No files found');
+      if (candidates.length === 0) return filePath;
+      const resolved = candidates[0];
+      if (candidates.length > 1) {
+        log(`[consensus] ambiguous filename resolution for "${fileName}": chose "${resolved}" among [${candidates.join(', ')}]\n`);
+      }
+      return remapToReviewRoot(resolved) ?? asProjectRootPath(resolved);
+    } catch { /* search failed */ }
+    return filePath; // return original, let fileRead produce a clear error
+  };
+
+  return {
+    resolveToolPath,
+    fileRead: (args) => fileTools.fileRead(args as any, reviewRoot),
+    fileGrep: (args) => fileTools.fileGrep(args as any, reviewRoot),
+  };
+}
+
+function timestamp(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/**
+ * Build the `verifierToolRunner` callback handed to ConsensusEngine. Tools are
+ * anchored at `effectiveRoots[0]` when roots are declared: file_read/file_grep
+ * accept (and resolve against) the review worktree, and git_log reports the
+ * worktree's branch history rather than the project root's.
+ */
+export function buildVerifierToolRunner(opts: VerifierToolRunnerOptions): VerifierToolRunner {
+  const access = opts.access ?? buildVerifierFileAccess(opts);
+  const log = opts.log ?? ((line: string) => { process.stderr.write(line); });
+  const effectiveRoots = opts.effectiveRoots ?? [];
+  const gitRoot = effectiveRoots.length > 0 ? effectiveRoots[0] : opts.projectRoot;
+  const makeGitTools = opts.makeGitTools ?? ((root: string) => new GitTools(root));
+  const gitTools = makeGitTools(gitRoot);
+  const { fileTools, memory } = opts;
+
+  return async (agentId, toolName, args) => {
+    const toolStart = Date.now();
+    try {
+      let result: string;
+      switch (toolName) {
+        case 'file_read': {
+          const resolvedPath = await access.resolveToolPath((args as any).path);
+          result = await access.fileRead({ ...args, path: resolvedPath });
+          break;
+        }
+        case 'file_grep': {
+          const grepPath = (args as any).path ? await access.resolveToolPath((args as any).path) : undefined;
+          result = await access.fileGrep({ ...args, ...(grepPath ? { path: grepPath } : {}) });
+          break;
+        }
+        case 'file_search':
+          result = await fileTools.fileSearch({
+            ...(args as any),
+            resolutionRoots: effectiveRoots,
+          });
+          break;
+        case 'memory_query': {
+          const results = memory.search(agentId, (args as any).query ?? '', 5);
+          result = results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
+          break;
+        }
+        case 'git_log': result = await gitTools.gitLog(args as any); break;
+        default: result = `Unknown tool: ${toolName}`;
+      }
+      const argSummary = toolName === 'file_read' ? (args as any).path
+        : toolName === 'file_grep' ? `"${(args as any).pattern}" in ${(args as any).path ?? '.'}`
+        : toolName === 'file_search' ? (args as any).pattern
+        : toolName === 'memory_query' ? `"${(args as any).query}"`
+        : '';
+      log(`${timestamp()} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${argSummary}) → ${result.length}B (${Date.now() - toolStart}ms)\n`);
+      return result;
+    } catch (e) {
+      log(`${timestamp()} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${JSON.stringify(args).slice(0, 200)}) → ERROR: ${(e as Error).message} (${Date.now() - toolStart}ms)\n`);
+      return `Tool error: ${(e as Error).message}`;
+    }
+  };
+}

@@ -7,11 +7,12 @@ import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-re
 import { persistRelayTasks } from './relay-tasks';
 import { seedRecentConsensusTaskIds } from './native-tasks';
 import { trackLifecycleTask } from '../lifecycle-tasks';
-import { FILE_TOOLS, FileTools, GitTools, Sandbox } from '@gossip/tools';
+import { FILE_TOOLS, FileTools, Sandbox } from '@gossip/tools';
 import { MemorySearcher } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
 import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
 import { buildGatedCrossReviewSkillsResolver } from './cross-review-skill-gate';
+import { buildVerifierFileAccess, buildVerifierToolRunner } from './verifier-tool-runner';
 import { makeRoundContext } from '@gossip/orchestrator';
 import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
@@ -558,36 +559,18 @@ export async function handleCollect(
       // Constructed AFTER effectiveRoots so fileSearch can prioritize matches under a
       // resolution root (e.g. sibling worktrees) instead of blindly taking the first hit.
       const verifierFs = new FileTools(new Sandbox(process.cwd()));
-      const verifierGit = new GitTools(process.cwd());
       const verifierMemory = new MemorySearcher(process.cwd());
 
-      // Resolve short file paths (e.g. "cross-reviewer-selection.ts") to full project-relative
-      // paths. LLMs often cite just the filename without the directory prefix.
-      // Disambiguation rules when multiple matches exist:
-      //   1. Prefer a match whose absolute path starts with any effectiveRoots entry
-      //   2. Else prefer paths inside process.cwd() over paths outside
-      //   3. On ambiguity, emit a stderr warning with the chosen + all candidates
-      const resolveToolPath = async (filePath: string): Promise<string> => {
-        if (!filePath) return filePath;
-        // Try as-is first — if Sandbox validates it, the file exists
-        try { new Sandbox(process.cwd()).validatePath(filePath); return filePath; } catch { /* not found */ }
-        // Search via file_search for the bare filename, passing resolutionRoots so
-        // fileSearch ranks matches inside a resolution root ahead of stray duplicates.
-        const fileName = filePath.split('/').pop() ?? filePath;
-        try {
-          const searchResult = await verifierFs.fileSearch({ pattern: fileName, resolutionRoots: effectiveRoots });
-          const candidates = searchResult.split('\n').map(s => s.trim()).filter(s => s && s !== 'No files found');
-          if (candidates.length === 0) return filePath;
-          const resolved = candidates[0];
-          if (candidates.length > 1) {
-            process.stderr.write(
-              `[consensus] ambiguous filename resolution for "${fileName}": chose "${resolved}" among [${candidates.join(', ')}]\n`,
-            );
-          }
-          return resolved;
-        } catch { /* search failed */ }
-        return filePath; // return original, let fileRead produce a clear error
-      };
+      // Issue #710: anchor Phase-2 verifier file access at the review worktree
+      // when resolutionRoots are declared, mirroring the Phase-1 relay dispatch
+      // plumbing (PR #328). Shared by BOTH Phase-2 tool loops — the engine-driven
+      // verifierToolRunner below and runOneRelayCrossReview's inline runToolCalls.
+      const verifierAccess = buildVerifierFileAccess({
+        fileTools: verifierFs,
+        projectRoot: process.cwd(),
+        effectiveRoots,
+      });
+      const resolveToolPath = verifierAccess.resolveToolPath;
 
       // Consensus auto-verify DI wiring (spec
       // docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md).
@@ -638,49 +621,13 @@ export async function handleCollect(
         round: effectiveRound,
         verifierDispatch: _autoVerifyDispatch,
         warningSink: _autoVerifyWarningSink,
-        verifierToolRunner: async (agentId: string, toolName: string, args: Record<string, unknown>): Promise<string> => {
-          const toolStart = Date.now();
-          try {
-            let result: string;
-            switch (toolName) {
-              case 'file_read': {
-                const resolvedPath = await resolveToolPath((args as any).path);
-                result = await verifierFs.fileRead({ ...args, path: resolvedPath } as any);
-                break;
-              }
-              case 'file_grep': {
-                const grepPath = (args as any).path ? await resolveToolPath((args as any).path) : undefined;
-                result = await verifierFs.fileGrep({ ...args, ...(grepPath ? { path: grepPath } : {}) } as any);
-                break;
-              }
-              case 'file_search':
-                result = await verifierFs.fileSearch({
-                  ...(args as any),
-                  resolutionRoots: effectiveRoots,
-                });
-                break;
-              case 'memory_query': {
-                const results = verifierMemory.search(agentId, (args as any).query ?? '', 5);
-                result = results.length ? results.map(r => `[${r.source}] ${r.name}: ${r.snippets.join(' | ')}`).join('\n---\n') : 'No memory results found.';
-                break;
-              }
-              case 'git_log': result = await verifierGit.gitLog(args as any); break;
-              default: result = `Unknown tool: ${toolName}`;
-            }
-            const argSummary = toolName === 'file_read' ? (args as any).path
-              : toolName === 'file_grep' ? `"${(args as any).pattern}" in ${(args as any).path ?? '.'}`
-              : toolName === 'file_search' ? (args as any).pattern
-              : toolName === 'memory_query' ? `"${(args as any).query}"`
-              : '';
-            const now = new Date(); const stamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
-            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${argSummary}) → ${result.length}B (${Date.now() - toolStart}ms)\n`);
-            return result;
-          } catch (e) {
-            const now = new Date(); const stamp = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
-            process.stderr.write(`${stamp} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${JSON.stringify(args).slice(0, 200)}) → ERROR: ${(e as Error).message} (${Date.now() - toolStart}ms)\n`);
-            return `Tool error: ${(e as Error).message}`;
-          }
-        },
+        verifierToolRunner: buildVerifierToolRunner({
+          access: verifierAccess,
+          fileTools: verifierFs,
+          memory: verifierMemory,
+          projectRoot: process.cwd(),
+          effectiveRoots,
+        }),
       });
 
       // Server-side Phase 2: engine selects cross-reviewers and runs internally.
@@ -760,11 +707,11 @@ export async function handleCollect(
               if (tc.name === 'file_read') {
                 const args = { ...(tc.arguments as any) };
                 if (args.path) args.path = await resolveToolPath(args.path);
-                out = await verifierFs.fileRead(args);
+                out = await verifierAccess.fileRead(args);
               } else if (tc.name === 'file_grep') {
                 const args = { ...(tc.arguments as any) };
                 if (args.path) args.path = await resolveToolPath(args.path);
-                out = await verifierFs.fileGrep(args);
+                out = await verifierAccess.fileGrep(args);
               } else {
                 out = `Tool ${tc.name} not available to cross-reviewers`;
               }
