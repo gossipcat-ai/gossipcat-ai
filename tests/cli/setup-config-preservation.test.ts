@@ -22,6 +22,7 @@ import { resolve, join } from 'path';
 import { tmpdir } from 'os';
 import {
   mergeSetupConfig,
+  resolveMainAgent,
   buildMalformedConfigHint,
   flushStagedAgentFileWrites,
 } from '../../apps/cli/src/setup-response';
@@ -88,6 +89,112 @@ describe('mergeSetupConfig — top-level field preservation (f16)', () => {
       newAgents: {},
     });
     expect(() => validateConfig(merged)).not.toThrow();
+  });
+});
+
+describe('resolveMainAgent — orchestrator preservation (#724)', () => {
+  const existingNone = { main_agent: { provider: 'none', model: 'none' }, agents: {} };
+  const existingAnthropic = { main_agent: { provider: 'anthropic', model: 'claude-opus-4-6' }, agents: {} };
+
+  it('lets an explicit provider+model pair win over the existing config', () => {
+    expect(resolveMainAgent({ provider: 'openai', model: 'gpt-4o' }, existingAnthropic))
+      .toEqual({ provider: 'openai', model: 'gpt-4o' });
+  });
+
+  it('preserves the existing main_agent when both fields are omitted', () => {
+    // The #724 regression: an omitted main_provider used to reset a deliberate
+    // provider:"none" (native orchestration) back to google/gemini-2.5-pro.
+    expect(resolveMainAgent({}, existingNone)).toEqual({ provider: 'none', model: 'none' });
+    expect(resolveMainAgent({}, existingAnthropic)).toEqual({ provider: 'anthropic', model: 'claude-opus-4-6' });
+  });
+
+  it('preserves the existing main_agent in replace mode too', () => {
+    // replace mode replaces the team, not the orchestrator choice — the handler
+    // passes the same existingConfig in both modes (only existingAgents is
+    // mode-gated), so preservation is mode-independent by construction.
+    const replaceModeConfig = { ...existingAnthropic, agents: {} };
+    expect(resolveMainAgent({}, replaceModeConfig)).toEqual({ provider: 'anthropic', model: 'claude-opus-4-6' });
+  });
+
+  it('defaults to none/none on a fresh setup with nothing to preserve', () => {
+    expect(resolveMainAgent({}, {})).toEqual({ provider: 'none', model: 'none' });
+    expect(resolveMainAgent({}, undefined)).toEqual({ provider: 'none', model: 'none' });
+  });
+
+  it('never resolves to the old hardcoded google/gemini-2.5-pro default', () => {
+    for (const existing of [{}, existingNone, existingAnthropic]) {
+      const resolved = resolveMainAgent({}, existing);
+      expect(resolved.provider).not.toBe('google');
+      expect(resolved.model).not.toBe('gemini-2.5-pro');
+    }
+  });
+
+  it('ignores a malformed or invalid-provider main_agent and falls back to none/none', () => {
+    // A corrupt orchestrator entry must not be preserved — otherwise gossip_setup
+    // could never repair a config whose provider validateConfig rejects.
+    expect(resolveMainAgent({}, { main_agent: { provider: 'native', model: 'sonnet' } }))
+      .toEqual({ provider: 'none', model: 'none' });
+    expect(resolveMainAgent({}, { main_agent: { provider: 'anthropic' } }))
+      .toEqual({ provider: 'none', model: 'none' });
+    expect(resolveMainAgent({}, { main_agent: 'anthropic/claude-opus-4-6' }))
+      .toEqual({ provider: 'none', model: 'none' });
+  });
+
+  it('ignores a lone main_model and keeps the preserved pair, with a warning', () => {
+    const resolved = resolveMainAgent({ model: 'gpt-4o' }, existingAnthropic);
+    expect(resolved.provider).toBe('anthropic');
+    expect(resolved.model).toBe('claude-opus-4-6');
+    expect(resolved.warning).toContain('main_provider must be passed explicitly');
+  });
+
+  it('honors a lone main_provider when the preserved entry already uses it', () => {
+    const resolved = resolveMainAgent({ provider: 'anthropic' }, existingAnthropic);
+    expect(resolved).toEqual({ provider: 'anthropic', model: 'claude-opus-4-6' });
+  });
+
+  it('honors a lone main_provider "none" (its model is "none")', () => {
+    expect(resolveMainAgent({ provider: 'none' }, existingAnthropic))
+      .toEqual({ provider: 'none', model: 'none' });
+  });
+
+  it('refuses to guess a model when a lone main_provider switches provider', () => {
+    const resolved = resolveMainAgent({ provider: 'openai' }, existingAnthropic);
+    // No provider/model mismatch is written — the preserved pair is kept.
+    expect(resolved.provider).toBe('anthropic');
+    expect(resolved.model).toBe('claude-opus-4-6');
+    expect(resolved.warning).toContain('main_model is required');
+  });
+
+  it('produces a config that validateConfig accepts for every resolution branch', () => {
+    const cases = [
+      resolveMainAgent({ provider: 'openai', model: 'gpt-4o' }, existingAnthropic),
+      resolveMainAgent({}, existingAnthropic),
+      resolveMainAgent({}, {}),
+      resolveMainAgent({ model: 'gpt-4o' }, {}),
+    ];
+    for (const mainAgent of cases) {
+      const merged = mergeSetupConfig({
+        existingConfig: {},
+        mainAgent: { provider: mainAgent.provider, model: mainAgent.model },
+        existingAgents: {},
+        newAgents: {},
+      });
+      expect(() => validateConfig(merged)).not.toThrow();
+    }
+  });
+});
+
+describe('gossip_setup schema — no hardcoded orchestrator default (#724)', () => {
+  it('declares main_provider/main_model optional, not defaulted to google', () => {
+    const source = readFileSync(resolve(PROJECT_ROOT, 'apps', 'cli', 'src', 'mcp-server-sdk.ts'), 'utf-8');
+    expect(source).not.toContain(".default('google')");
+    expect(source).not.toContain(".default('gemini-2.5-pro')");
+    expect(source).toMatch(/main_provider: z\.enum\(MCP_MAIN_PROVIDER_ENUM\)\.optional\(\)/);
+    expect(source).toMatch(/main_model: z\.string\(\)\.optional\(\)/);
+    // The handler must route the request through the resolver, not straight
+    // into mergeSetupConfig.
+    expect(source).toContain('resolveMainAgent(');
+    expect(source).not.toMatch(/mainAgent: \{ provider: main_provider, model: main_model \}/);
   });
 });
 

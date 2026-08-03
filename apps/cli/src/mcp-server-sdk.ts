@@ -339,7 +339,7 @@ import { restorePendingConsensus } from './handlers/relay-cross-review';
 import { filterWatchEvents, WATCH_MAX_EVENTS } from './gossip-watch';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
-import { buildDashboardAdvisory, mergeSetupConfig, buildMalformedConfigHint, flushStagedAgentFileWrites } from './setup-response';
+import { buildDashboardAdvisory, mergeSetupConfig, resolveMainAgent, buildMalformedConfigHint, flushStagedAgentFileWrites } from './setup-response';
 import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
@@ -2744,10 +2744,10 @@ export function createMcpServer(): McpServer {
       // lens generator, gossip publisher all call createProvider on this value),
       // and createProvider has no 'native' branch. 'native' remains valid for
       // utility_model and per-agent overrides.
-      main_provider: z.enum(MCP_MAIN_PROVIDER_ENUM).default('google')
-        .describe('Provider for the orchestrator LLM. Use "none" when no API key is available — features degrade gracefully to profile-based. Note: "native" is not valid here (use it only for utility_model or per-agent overrides).'),
-      main_model: z.string().default('gemini-2.5-pro')
-        .describe('Model ID for orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o)'),
+      main_provider: z.enum(MCP_MAIN_PROVIDER_ENUM).optional()
+        .describe('OPTIONAL provider for the orchestrator LLM. Omit to keep the current orchestrator: the existing .gossip/config.json main_agent is preserved in BOTH merge and replace modes (replace replaces the team, not the orchestrator choice); on a fresh setup with nothing to preserve it resolves to "none" — the zero-config native-host orchestration state, not Google. Pass it explicitly (together with main_model) to change the orchestrator. Use "none" when no API key is available — features degrade gracefully to profile-based. Note: "native" is not valid here (use it only for utility_model or per-agent overrides).'),
+      main_model: z.string().optional()
+        .describe('OPTIONAL model ID for the orchestrator (e.g. gemini-2.5-pro, claude-sonnet-4-6, gpt-4o). Only honored alongside an explicit main_provider — main_model on its own is ignored and the preserved/default main_agent is kept. Omit it when omitting main_provider.'),
       mode: z.enum(['merge', 'replace', 'update_instructions']).default('merge')
         .describe('"merge" (default) keeps existing agents and adds/updates the ones specified. "replace" overwrites entire config. "update_instructions" updates agent instructions without touching the config.'),
       instruction_agent_ids: z.union([z.string(), z.array(z.string())]).optional().describe('Agent IDs for instruction update'),
@@ -3012,9 +3012,18 @@ export function createMcpServer(): McpServer {
       // is replaced); in merge mode existing agents are kept and updated. Other
       // top-level fields are preserved either way — replace replaces the team,
       // not the whole top-level config.
+      // #724: main_provider/main_model are optional. An omitted provider must
+      // preserve the on-disk main_agent (both modes) and fall back to the
+      // zero-config none/none only on a fresh setup — never to a hardcoded
+      // Google default. Resolution lives in setup-response.ts so it is unit
+      // testable without booting the MCP server; mergeSetupConfig stays dumb.
+      const resolvedMainAgent = resolveMainAgent(
+        { provider: main_provider, model: main_model },
+        existingConfig,
+      );
       const config = mergeSetupConfig({
         existingConfig,
-        mainAgent: { provider: main_provider, model: main_model },
+        mainAgent: { provider: resolvedMainAgent.provider, model: resolvedMainAgent.model },
         existingAgents,
         newAgents: configAgents,
       });
@@ -3208,7 +3217,11 @@ export function createMcpServer(): McpServer {
         lines.push(`Preserved from existing config (${preservedIds.length}):`);
         lines.push(...preservedIds.map(id => `  • ${id} → ${existingAgents[id].provider}/${existingAgents[id].model}`));
       }
+      if (resolvedMainAgent.warning) {
+        lines.push(`⚠ ${resolvedMainAgent.warning}`);
+      }
       lines.push(`\nMode: ${mode} | Config: .gossip/config.json (${Object.keys(config.agents).length} agents total)`);
+      lines.push(`Orchestrator: ${resolvedMainAgent.provider}/${resolvedMainAgent.model}`);
       lines.push(`Rules: ${env.rulesFile} (${env.host} will read this on next session)`);
       if (ctx.relay?.dashboardUrl) {
         lines.push(`Dashboard: ${dashboardClickableUrl(ctx.relay.dashboardUrl, ctx.relay.dashboardKey)}`);

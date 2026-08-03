@@ -12,6 +12,8 @@
  *     anchor when cross-referencing with the Team page.
  */
 
+import { VALID_MAIN_PROVIDERS } from './config';
+
 export interface SyncResultSummary {
   ok: boolean;
   mergedAgentCount: number;
@@ -61,7 +63,10 @@ export function buildDashboardAdvisory(input: DashboardAdvisoryInput): string[] 
  * - `existingConfig` is spread first so any top-level field we don't manage
  *   (consensus.siblingRoots, autoDiscoverWorktrees, orchestratorOwnedGlobs,
  *   utility_model, …) survives a re-run in BOTH merge and replace modes.
- * - `main_agent` is always overwritten from the request.
+ * - `main_agent` is always overwritten from the value the caller passes in.
+ *   The caller resolves that value with `resolveMainAgent` first (#724), so an
+ *   omitted `main_provider` preserves the on-disk orchestrator instead of being
+ *   stomped by a schema default.
  * - `agents` is `{ ...existingAgents, ...newAgents }`. The caller passes an
  *   empty `existingAgents` in replace mode (team replaced) and the prior agent
  *   map in merge mode. Either way, OTHER top-level fields are preserved —
@@ -85,6 +90,100 @@ export function mergeSetupConfig(input: {
     main_agent: { provider: mainAgent.provider, model: mainAgent.model },
     agents: { ...existingAgents, ...newAgents },
   };
+}
+
+/**
+ * The zero-config orchestrator state: no API LLM, host classifies natively
+ * (Claude Code / Cursor). Used when a fresh setup has nothing to preserve.
+ */
+export const NATIVE_MAIN_AGENT: { provider: string; model: string } = { provider: 'none', model: 'none' };
+
+export interface MainAgentSelection {
+  provider: string;
+  model: string;
+  /** Set when a half-specified request pair was ignored — surfaced to the user. */
+  warning?: string;
+}
+
+function trimmed(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Read a usable `main_agent` out of an existing config. Returns null when the
+ * field is absent, malformed, or names a provider validateConfig would reject —
+ * a corrupt orchestrator entry must not be preserved, otherwise gossip_setup
+ * would become unable to repair the very config it wrote.
+ */
+function readExistingMainAgent(
+  existingConfig: Record<string, unknown> | null | undefined,
+): { provider: string; model: string } | null {
+  const raw = (existingConfig ?? {})['main_agent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const provider = trimmed((raw as Record<string, unknown>).provider);
+  const model = trimmed((raw as Record<string, unknown>).model);
+  if (!provider || !model) return null;
+  if (!VALID_MAIN_PROVIDERS.includes(provider)) return null;
+  return { provider, model };
+}
+
+/**
+ * Resolve the orchestrator LLM for a gossip_setup run (#724).
+ *
+ * Before this existed, `main_provider` / `main_model` carried Zod defaults of
+ * google / gemini-2.5-pro, so ANY gossip_setup call that omitted them silently
+ * reset a deliberately-configured `main_agent` (e.g. provider "none" for native
+ * orchestration) back to Google.
+ *
+ * Resolution order:
+ *  1. An explicit `provider` (with `model`) always wins.
+ *  2. Otherwise the existing on-disk `main_agent` is preserved — in BOTH merge
+ *     and replace modes. Replace replaces the team, not the orchestrator choice,
+ *     consistent with the f16 top-level field-preservation invariant above.
+ *  3. Otherwise (fresh setup, nothing to preserve) → `none`/`none`, the
+ *     documented zero-config native-orchestration state.
+ *
+ * The pair is atomic: only an explicit `provider` activates the request. A lone
+ * `model` is ignored (it cannot be attributed to a provider), and a lone
+ * `provider` is honored only when a model can be sourced without guessing —
+ * either the preserved entry already uses that same provider, or the provider is
+ * "none" (whose model is "none"). Anything else keeps the preserved/default pair
+ * and reports a warning rather than writing a provider/model mismatch.
+ */
+export function resolveMainAgent(
+  requested: { provider?: string; model?: string },
+  existingConfig: Record<string, unknown> | null | undefined,
+): MainAgentSelection {
+  const reqProvider = trimmed(requested.provider);
+  const reqModel = trimmed(requested.model);
+  const preserved = readExistingMainAgent(existingConfig);
+  const fallback = preserved ?? { ...NATIVE_MAIN_AGENT };
+
+  if (reqProvider && reqModel) return { provider: reqProvider, model: reqModel };
+
+  if (reqProvider) {
+    if (preserved && preserved.provider === reqProvider) {
+      return { provider: reqProvider, model: preserved.model };
+    }
+    if (reqProvider === NATIVE_MAIN_AGENT.provider) return { ...NATIVE_MAIN_AGENT };
+    return {
+      ...fallback,
+      warning:
+        `main_provider "${reqProvider}" ignored — main_model is required when switching the orchestrator provider. ` +
+        `Kept main_agent ${fallback.provider}/${fallback.model}.`,
+    };
+  }
+
+  if (reqModel && reqModel !== fallback.model) {
+    return {
+      ...fallback,
+      warning:
+        `main_model "${reqModel}" ignored — main_provider must be passed explicitly to change the orchestrator LLM. ` +
+        `Kept main_agent ${fallback.provider}/${fallback.model}.`,
+    };
+  }
+
+  return fallback;
 }
 
 /**
