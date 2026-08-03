@@ -340,6 +340,7 @@ import { filterWatchEvents, WATCH_MAX_EVENTS } from './gossip-watch';
 import { persistRelayTasks, restoreRelayTasksAsFailed } from './handlers/relay-tasks';
 import { pickStickyPort, writeStickyPort, RELAY_STICKY_FILE, HTTP_MCP_STICKY_FILE } from './stickyPort';
 import { buildDashboardAdvisory, mergeSetupConfig, resolveMainAgent, buildMalformedConfigHint, flushStagedAgentFileWrites } from './setup-response';
+import { formatQuotaLine } from './quota-banner';
 import { refreshNativeAgentFromDisk } from './native-agent-cache';
 import { generateRulesContent } from './rules-content';
 import { formatDropReceipt } from './format-drop-receipt';
@@ -2323,23 +2324,7 @@ export function createMcpServer(): McpServer {
         const quotaRaw = readFileSync(quotaPath, 'utf8');
         const quotaState: Record<string, { exhaustedUntil?: number; reason?: string; consecutive429s?: number }> = JSON.parse(quotaRaw);
         for (const [provider, state] of Object.entries(quotaState)) {
-          const now = Date.now();
-          const cooling = !!state.exhaustedUntil && state.exhaustedUntil > now;
-          const consecutive = state.consecutive429s ?? 0;
-          if (cooling && state.reason === 'spend_cap') {
-            // Monthly spend cap: a cooldown timer is meaningless to the user —
-            // it only recovers when they raise the cap or the month rolls over.
-            lines.push(`  Quota: ${provider} — EXHAUSTED (monthly spend cap — manage at https://ai.studio/spend)`);
-          } else if (cooling) {
-            const cooldownSec = Math.ceil((state.exhaustedUntil! - now) / 1000);
-            lines.push(`  Quota: ${provider} — EXHAUSTED (${cooldownSec}s cooldown)`);
-          } else if (consecutive >= 5) {
-            // Cooldown expired but a long run of 429s preceded it and no
-            // successful call has since reset the counter — do NOT claim OK.
-            lines.push(`  Quota: ${provider} — SUSPECT (${consecutive} consecutive 429s before cooldown expiry — verify with a real call)`);
-          } else {
-            lines.push(`  Quota: ${provider} — OK`);
-          }
+          lines.push(formatQuotaLine(provider, state));
         }
       } catch { /* quota-state.json not present — skip */ }
 
