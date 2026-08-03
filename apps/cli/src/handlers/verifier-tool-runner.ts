@@ -11,8 +11,9 @@
  * When `effectiveRoots` is empty every code path here is byte-identical to the
  * pre-#710 behavior.
  */
-import { FileTools, GitTools, Sandbox } from '@gossip/tools';
-import type { MemorySearcher } from '@gossip/orchestrator';
+import { FileTools, GitTools, Sandbox, formatSkillNotFound, formatSkillPayload, recordSkillPull } from '@gossip/tools';
+import { resolveServableSkill } from '@gossip/orchestrator';
+import type { MemorySearcher, SkillQueryResult } from '@gossip/orchestrator';
 import { existsSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -21,6 +22,27 @@ export type VerifierToolRunner = (
   toolName: string,
   args: Record<string, unknown>,
 ) => Promise<string>;
+
+/**
+ * Per-reviewer, per-round cap on `skill_query` (issue #728). Mirrors the relay
+ * value in `WorkerAgent.TOOL_CALL_BUDGETS.skill_query` — the prompt advertises
+ * at most a handful of on-demand names, so two pulls covers the realistic case
+ * while a confused reviewer cannot burn its 7 verification turns on skill
+ * fetches. Over-budget calls return an error STRING (never throw) so the
+ * remaining turns stay available for file evidence.
+ */
+export const VERIFIER_SKILL_QUERY_BUDGET = 2;
+
+/**
+ * Raw-argument length cap, mirroring the relay `skill_query` zod schema
+ * (`packages/tools/src/tool-schemas.ts`). The engine-driven path has no zod
+ * gate in front of it — the arguments come straight off an LLM tool call — so
+ * the bound is enforced here before the string reaches `normalizeSkillName`.
+ */
+export const MAX_SKILL_QUERY_NAME_LENGTH = 256;
+
+/** Resolve one on-demand skill for a cross-reviewer. */
+export type VerifierSkillResolver = (agentId: string, skill: string) => SkillQueryResult;
 
 /** Read-only file access for cross-reviewers, anchored at the review root. */
 export interface VerifierFileAccess {
@@ -45,6 +67,13 @@ export interface VerifierToolRunnerOptions extends VerifierFileAccessOptions {
   access?: VerifierFileAccess;
   /** Injection seam for tests — the ROOT choice is the behavior under test. */
   makeGitTools?: (root: string) => GitTools;
+  /**
+   * On-demand skill resolution for `skill_query`. Defaults to
+   * `resolveServableSkill` against `projectRoot` — the SAME resolver +
+   * quarantine predicate the relay tool uses. Injected only in tests; a caller
+   * must not substitute a resolver with different advertisement semantics.
+   */
+  skillResolver?: VerifierSkillResolver;
 }
 
 /**
@@ -193,6 +222,58 @@ export function buildVerifierToolRunner(opts: VerifierToolRunnerOptions): Verifi
   const makeGitTools = opts.makeGitTools ?? ((root: string) => new GitTools(root));
   const gitTools = makeGitTools(gitRoot);
   const { fileTools, memory } = opts;
+  const skillResolver: VerifierSkillResolver =
+    opts.skillResolver ?? ((agentId, skill) => resolveServableSkill(agentId, skill, opts.projectRoot));
+  // One runner is built per collect round, so this map IS the per-reviewer,
+  // per-round budget ledger.
+  const skillQueryCalls = new Map<string, number>();
+
+  /**
+   * `skill_query` — hand a cross-reviewer the raw markdown of one of its own
+   * bound skills (issue #728). The agentId comes from the engine's TaskEntry,
+   * never from the tool arguments, so an agent cannot pull a peer's local
+   * skill. Unknown and quarantined resolve to the SAME not-found message so a
+   * reviewer cannot probe which of its skills the effectiveness pipeline
+   * suppressed.
+   */
+  const runSkillQuery = (agentId: string, args: Record<string, unknown>): string => {
+    const used = skillQueryCalls.get(agentId) ?? 0;
+    if (used >= VERIFIER_SKILL_QUERY_BUDGET) {
+      return `Error: skill_query per-round budget exhausted (${VERIFIER_SKILL_QUERY_BUDGET} calls). The markdown from your earlier skill_query call is in this conversation — re-read it instead of calling again.`;
+    }
+    // Charged before validation, mirroring the relay budget gate: a malformed
+    // call still consumes a slot so a broken loop cannot retry for free.
+    skillQueryCalls.set(agentId, used + 1);
+
+    const raw = typeof args.skill === 'string' ? args.skill : '';
+    if (!raw.trim()) return 'skill_query requires a non-empty skill name.';
+    if (raw.length > MAX_SKILL_QUERY_NAME_LENGTH) {
+      return `skill_query skill name exceeds ${MAX_SKILL_QUERY_NAME_LENGTH} characters.`;
+    }
+
+    let resolution: SkillQueryResult;
+    try {
+      resolution = skillResolver(agentId, raw);
+    } catch {
+      // A resolver failure is a not-found from the reviewer's point of view;
+      // never surface an internal stack into the tool response.
+      resolution = { canonicalName: '', skill: null };
+    }
+    if (!resolution.skill) return formatSkillNotFound(resolution.canonicalName, agentId);
+
+    // Observability: successful pulls only. The audit schema has no phase
+    // field, so the row reuses `runtime: 'relay'` — this IS the relay/LLM
+    // reviewer path. `attributed` is true because the identity is the engine's,
+    // not a self-attested argument.
+    recordSkillPull(opts.projectRoot, {
+      agentId,
+      skill: resolution.canonicalName,
+      resolvedPath: resolution.skill.path,
+      runtime: 'relay',
+      attributed: true,
+    });
+    return formatSkillPayload(resolution.canonicalName, resolution.skill);
+  };
 
   return async (agentId, toolName, args) => {
     const toolStart = Date.now();
@@ -221,12 +302,17 @@ export function buildVerifierToolRunner(opts: VerifierToolRunnerOptions): Verifi
           break;
         }
         case 'git_log': result = await gitTools.gitLog(args as any); break;
+        case 'skill_query': result = runSkillQuery(agentId, args); break;
         default: result = `Unknown tool: ${toolName}`;
       }
       const argSummary = toolName === 'file_read' ? (args as any).path
         : toolName === 'file_grep' ? `"${(args as any).pattern}" in ${(args as any).path ?? '.'}`
         : toolName === 'file_search' ? (args as any).pattern
         : toolName === 'memory_query' ? `"${(args as any).query}"`
+        // The raw skill argument is model-controlled: strip everything outside
+        // the normalized alphabet so it cannot forge a second observability
+        // line, and bound its length.
+        : toolName === 'skill_query' ? String((args as any).skill ?? '').replace(/[^\w.-]/g, '').slice(0, 64)
         : '';
       log(`${timestamp()} 🤝 [consensus] 🔧 ${agentId} tool_call: ${toolName}(${argSummary}) → ${result.length}B (${Date.now() - toolStart}ms)\n`);
       return result;

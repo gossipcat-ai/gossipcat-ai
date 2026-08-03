@@ -9,7 +9,7 @@
 //   - summaries: Map<string, string> with at least 2 agents
 //   - engine config: { llm, registryGet, verifierToolRunner? }
 
-import { ConsensusEngine, ConsensusEngineConfig } from '../../packages/orchestrator/src/consensus-engine';
+import { ConsensusEngine, ConsensusEngineConfig, VERIFIER_TOOLS } from '../../packages/orchestrator/src/consensus-engine';
 import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry, LLMResponse } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
@@ -438,5 +438,52 @@ describe('crossReviewForAgent — tool output truncation', () => {
     expect(toolResultMsg).toBeDefined();
     expect(toolResultMsg!.content).toBe(exactOutput);
     expect(toolResultMsg!.content).not.toContain('[truncated]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test suite 6: skill_query advertisement (#728)
+// ---------------------------------------------------------------------------
+
+describe('VERIFIER_TOOLS — skill_query advertisement (#728)', () => {
+  it('advertises skill_query alongside the read-only evidence tools', () => {
+    expect(VERIFIER_TOOLS.map(t => t.name)).toEqual(
+      expect.arrayContaining(['file_read', 'file_grep', 'file_search', 'memory_query', 'git_log', 'skill_query']),
+    );
+  });
+
+  it('declares skill_query with a single required `skill` string parameter', () => {
+    const def = VERIFIER_TOOLS.find(t => t.name === 'skill_query');
+    expect(def).toBeDefined();
+    expect(def!.parameters.required).toEqual(['skill']);
+    expect((def!.parameters.properties as any).skill).toMatchObject({ type: 'string' });
+    // Exactly the relay tool's contract — no extra knobs the runner ignores.
+    expect(Object.keys(def!.parameters.properties)).toEqual(['skill']);
+  });
+
+  it('states the per-round budget in the description so the model self-limits', () => {
+    const def = VERIFIER_TOOLS.find(t => t.name === 'skill_query');
+    expect(def!.description).toContain('2 calls');
+  });
+
+  it('routes skill_query through the verifierToolRunner like any other tool', async () => {
+    const mockLlm: jest.Mocked<ILLMProvider> = { generate: jest.fn() };
+    const verifierToolRunner = jest.fn().mockResolvedValue('# skill: trust-boundaries  (resolved: /x/y.md)\n\nbody');
+    const engine = new ConsensusEngine({
+      llm: mockLlm,
+      registryGet: makeMockRegistryGet(),
+      verifierToolRunner,
+      round: testRound(),
+    } as ConsensusEngineConfig);
+
+    mockLlm.generate
+      .mockResolvedValueOnce({ text: '', toolCalls: [{ id: 'tc1', name: 'skill_query', arguments: { skill: 'trust-boundaries' } }] } as LLMResponse)
+      .mockResolvedValueOnce({ text: VALID_CROSS_REVIEW_JSON } as LLMResponse);
+
+    await (engine as any).crossReviewForAgent(makeAgent('reviewer-agent'), makeSummaries('reviewer-agent', 'peer-agent'));
+
+    expect(verifierToolRunner).toHaveBeenCalledWith('reviewer-agent', 'skill_query', { skill: 'trust-boundaries' });
+    const toolMsg = mockLlm.generate.mock.calls[1][0].find((m: any) => m.role === 'tool');
+    expect(toolMsg!.content).toContain('# skill: trust-boundaries');
   });
 });
