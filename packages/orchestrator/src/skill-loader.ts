@@ -233,6 +233,43 @@ export interface LoadSkillsResult {
 }
 
 /**
+ * Drop reasons whose skills are advertised as fetchable on demand (issue #715).
+ *
+ * ONLY these two. A skill dropped for `status-failed`, `status-silent`, or
+ * `status-drift-demoted` is QUARANTINED by design — advertising it would let an
+ * agent pull back exactly the content the effectiveness pipeline just withheld.
+ * `kill-switch` / `excluded` are operator decisions, and the `*-mismatch` /
+ * `no-task-provided` reasons mean the skill does not apply to this dispatch at
+ * all. Those all stay silent.
+ */
+export const ON_DEMAND_DROP_REASONS: ReadonlySet<DroppedSkill['reason']> = new Set([
+  'below-keyword-threshold',
+  'budget-exceeded',
+] as const);
+
+/**
+ * Build the one-line on-demand skill advertisement appended after the SKILLS
+ * block (issue #715 / #698 part 2). Returns `''` when nothing is eligible, so
+ * callers can pass the result straight through and the line is simply omitted.
+ *
+ * Deliberately ONE line: this rides on every dispatch, so it is a fixed ~15
+ * token cost plus one comma-separated name per withheld skill.
+ */
+export function buildSkillsOnDemandLine(
+  dropped: DroppedSkill[],
+  runtime: 'native' | 'relay',
+): string {
+  const names = Array.from(new Set(
+    dropped.filter(d => ON_DEMAND_DROP_REASONS.has(d.reason)).map(d => d.skill),
+  )).sort();
+  if (names.length === 0) return '';
+  const tool = runtime === 'native'
+    ? 'mcp__gossipcat__gossip_skill_query(agent_id, skill)'
+    : 'skill_query(skill)';
+  return `Skills available on demand (not loaded): ${names.join(', ')} — fetch with ${tool}`;
+}
+
+/**
  * The effective skill set for an agent — the SINGLE source of truth shared by
  * the prompt builder (`loadSkills`) and the coverage-gap detector
  * (`SkillCatalog.checkCoverage`). When the skill index has slots for the agent,
@@ -328,78 +365,38 @@ export function loadSkills(
     if (!resolved) continue;
     const { content, path: resolvedPath } = resolved;
 
-    // Filter by skill effectiveness status written by checkEffectiveness().
-    // 'failed' and 'silent_skill' are suppressed — injecting a skill the RL loop
-    // has marked as harmful or silent would re-pollute the forward pass.
-    //
-    // Drift-demoted skills (`status: inconclusive` AND `regressed_from_passed_at` set)
-    // are quarantined here too — see drift-detection spec
-    // docs/specs/2026-05-13-passed-skill-drift-detection.md §"Quarantine
-    // drift-demoted skills". Organic inconclusive (no regressed_from_passed_at)
-    // continues to inject unchanged.
-    const parsedFrontmatter = parseSkillFrontmatter(content, resolvedPath);
-    const frontmatterStatus = parsedFrontmatter?.status;
-    const isDriftDemoted =
-      frontmatterStatus === 'inconclusive' &&
-      parsedFrontmatter?.regressed_from_passed_at != null;
-    if (
-      frontmatterStatus === 'failed' ||
-      frontmatterStatus === 'silent_skill' ||
-      isDriftDemoted
-    ) {
-      const dropReason: DroppedSkill['reason'] =
-        frontmatterStatus === 'failed'
-          ? 'status-failed'
-          : isDriftDemoted
-            ? 'status-drift-demoted'
-            : 'status-silent';
+    // Quarantine gate — SHARED with resolveServableSkill so the on-demand
+    // skill_query tools cannot serve what injection suppresses (consensus
+    // c64bedcd-a44a45e8). Reason semantics and per-reason logging are unchanged;
+    // only the predicate moved.
+    const quarantineReason = checkSkillQuarantine(content, resolvedPath, [skill], memConfig);
+    if (quarantineReason === 'status-failed' || quarantineReason === 'status-silent' || quarantineReason === 'status-drift-demoted') {
       gossipLog(
-        `Skipping ${isDriftDemoted ? 'drift-demoted inconclusive' : frontmatterStatus} skill ${agentId}/${skill} from injection`,
+        `Skipping ${quarantineReason === 'status-drift-demoted' ? 'drift-demoted inconclusive' : quarantineReason === 'status-failed' ? 'failed' : 'silent_skill'} skill ${agentId}/${skill} from injection`,
       );
-      dropped.push({
-        skill,
-        reason: dropReason,
-        hits: 0,
-      });
+      dropped.push({ skill, reason: quarantineReason, hits: 0 });
       continue;
     }
-    if (frontmatterStatus === 'flagged_for_manual_review') {
-      gossipLog(`Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended`);
+    if (quarantineReason === 'kill-switch' || quarantineReason === 'excluded') {
+      const detail = quarantineReason === 'kill-switch'
+        ? 'bundledMemories.enabled=false'
+        : 'listed in bundledMemories.exclude';
+      _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: ${detail}`);
+      emitPipelineSignals(projectRoot, [{
+        type: 'pipeline',
+        signal: 'skill_injection_skipped',
+        agentId,
+        taskId: `skill-loader:${agentId}:${skill}`,
+        metadata: { skillName: skill, reason: quarantineReason },
+        timestamp: new Date().toISOString(),
+      }]);
+      dropped.push({ skill, reason: quarantineReason, hits: 0 });
+      continue;
     }
 
-    // Kill-switch filter: propagated skills (ikp §4).
-    // Read propagated from raw frontmatter — SkillFrontmatter interface does not
-    // expose it yet (intentional: this field is for bundled skills only).
-    const isPropagated = /^propagated:\s*true\s*$/m.test(content.split('\n---')[0]);
-    if (isPropagated) {
-      if (!memConfig.bundledMemories.enabled) {
-        const reason = 'kill-switch' as const;
-        _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: bundledMemories.enabled=false`);
-        emitPipelineSignals(projectRoot, [{
-          type: 'pipeline',
-          signal: 'skill_injection_skipped',
-          agentId,
-          taskId: `skill-loader:${agentId}:${skill}`,
-          metadata: { skillName: skill, reason },
-          timestamp: new Date().toISOString(),
-        }]);
-        dropped.push({ skill, reason, hits: 0 });
-        continue;
-      }
-      if (memConfig.bundledMemories.exclude.includes(skill)) {
-        const reason = 'excluded' as const;
-        _log('skill-loader', `Skipping propagated skill ${agentId}/${skill}: listed in bundledMemories.exclude`);
-        emitPipelineSignals(projectRoot, [{
-          type: 'pipeline',
-          signal: 'skill_injection_skipped',
-          agentId,
-          taskId: `skill-loader:${agentId}:${skill}`,
-          metadata: { skillName: skill, reason },
-          timestamp: new Date().toISOString(),
-        }]);
-        dropped.push({ skill, reason, hits: 0 });
-        continue;
-      }
+    const parsedFrontmatter = parseSkillFrontmatter(content, resolvedPath);
+    if (parsedFrontmatter?.status === 'flagged_for_manual_review') {
+      gossipLog(`Injecting flagged_for_manual_review skill ${agentId}/${skill} — manual review recommended`);
     }
 
     // ── Scope axis (Option A from finding c8977bda-37564212:f3) ──────────────
@@ -776,6 +773,120 @@ function resolveSkillFromBases(
 /** Check if a skill file exists in any resolution path (without reading content). */
 export function resolveSkillExists(agentId: string, skill: string, projectRoot: string): boolean {
   return resolveSkill(agentId, skill, projectRoot) !== null;
+}
+
+/**
+ * Reasons a resolved skill file is withheld from an agent regardless of the
+ * dispatch. These are QUARANTINE conditions — distinct from the relevance
+ * filters (keyword threshold, budget, task-type) which are per-dispatch.
+ */
+export type SkillQuarantineReason =
+  | 'status-failed'
+  | 'status-silent'
+  | 'status-drift-demoted'
+  | 'kill-switch'
+  | 'excluded';
+
+/**
+ * The SINGLE quarantine predicate, shared by `loadSkills` (injection path) and
+ * `resolveServableSkill` (on-demand fetch path).
+ *
+ * Before this existed, `skill_query` / `gossip_skill_query` called the bare
+ * `resolveSkill`, which does containment + read only. That let an agent fetch
+ * by name exactly the content the effectiveness pipeline had just withheld —
+ * a content-access escalation for relay workers, which have no file_read
+ * fallback (consensus c64bedcd-a44a45e8). Both paths must run this check or
+ * the quarantine is advisory rather than enforced.
+ *
+ * Returns the reason, or `null` when the skill is servable. Skills with NO
+ * frontmatter status (utility skills like memory-retrieval) are servable —
+ * only explicit quarantine conditions filter.
+ *
+ * `excludeCandidates` are the names tested against `bundledMemories.exclude`.
+ * Callers pass every alias they know (raw + canonical) so an exclude entry
+ * written in either spelling still bites — fail-closed on ambiguity.
+ */
+export function checkSkillQuarantine(
+  content: string,
+  resolvedPath: string,
+  excludeCandidates: string[],
+  memConfig: ReturnType<typeof loadMemoryConfig>,
+): SkillQuarantineReason | null {
+  // Effectiveness status written by checkEffectiveness(). 'failed' and
+  // 'silent_skill' are suppressed — serving a skill the RL loop marked as
+  // harmful or silent would re-pollute the forward pass.
+  //
+  // Drift-demoted skills (`status: inconclusive` AND `regressed_from_passed_at`
+  // set) are quarantined too — see docs/specs/2026-05-13-passed-skill-drift-
+  // detection.md §"Quarantine drift-demoted skills". Organic inconclusive (no
+  // regressed_from_passed_at) stays servable.
+  const parsed = parseSkillFrontmatter(content, resolvedPath);
+  const status = parsed?.status;
+  if (status === 'failed') return 'status-failed';
+  if (status === 'silent_skill') return 'status-silent';
+  if (status === 'inconclusive' && parsed?.regressed_from_passed_at != null) {
+    return 'status-drift-demoted';
+  }
+
+  // Kill-switch filter: propagated skills (ikp §4). Read `propagated` from raw
+  // frontmatter — the SkillFrontmatter interface does not expose it (that field
+  // is for bundled skills only).
+  const isPropagated = /^propagated:\s*true\s*$/m.test(content.split('\n---')[0]);
+  if (isPropagated) {
+    if (!memConfig.bundledMemories.enabled) return 'kill-switch';
+    if (excludeCandidates.some(n => memConfig.bundledMemories.exclude.includes(n))) {
+      return 'excluded';
+    }
+  }
+
+  return null;
+}
+
+/** A skill that resolved AND cleared the quarantine gate. */
+export interface ServableSkill {
+  content: string;
+  path: string;
+}
+
+/**
+ * Result of an on-demand skill lookup. `canonicalName` is always safe to echo
+ * back to the agent; the raw argument never is (it is attacker-controlled and
+ * would land in a markdown header / JSONL field verbatim).
+ *
+ * `skill: null` covers BOTH "no such file" and "quarantined" deliberately —
+ * callers must render one indistinguishable not-found message so an agent
+ * cannot probe which of its skills the effectiveness pipeline suppressed.
+ */
+export interface SkillQueryResult {
+  canonicalName: string;
+  skill: ServableSkill | null;
+}
+
+/**
+ * Resolve a skill for on-demand fetch: normal resolution PLUS the quarantine
+ * gate. This is the ONLY resolver the skill_query tools may use.
+ */
+export function resolveServableSkill(
+  agentId: string,
+  skill: string,
+  projectRoot: string,
+): SkillQueryResult {
+  const canonicalName = normalizeSkillName(skill);
+  const resolved = resolveSkill(agentId, skill, projectRoot);
+  if (!resolved) return { canonicalName, skill: null };
+
+  const excludeCandidates = Array.from(new Set([skill, canonicalName].filter(Boolean)));
+  const reason = checkSkillQuarantine(
+    resolved.content,
+    resolved.path,
+    excludeCandidates,
+    loadMemoryConfig(projectRoot),
+  );
+  if (reason) {
+    _log('skill-loader', `skill_query withheld ${agentId}/${canonicalName}: ${reason}`);
+    return { canonicalName, skill: null };
+  }
+  return { canonicalName, skill: resolved };
 }
 
 /**

@@ -94,6 +94,12 @@ export const TOOL_SCHEMAS = {
   }).strict(),
 
   self_identity: z.object({}).strict(),
+
+  // Skill names are bounded at 128 chars by normalizeSkillName; cap the raw
+  // input at 256 so an oversized string never reaches the normalizer.
+  skill_query: z.object({
+    skill: z.string().min(1).max(256),
+  }).strict(),
 } as const;
 
 export type ToolName = keyof typeof TOOL_SCHEMAS;
