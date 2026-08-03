@@ -82,6 +82,34 @@ describe('#700 — rewriteKeywordsFrontmatter', () => {
     expect(fm?.status).toBe('active');
   });
 
+  // #705 — the rewrite's consumed region must equal the parser's. The parser
+  // (skill-parser.ts) requires `-` + whitespace for a sequence item and RESETS
+  // block context on the first line that fails, so anything at or after that
+  // line is NOT a keyword and must survive the rewrite byte-identical.
+  it('#705 — stops consuming at the first line the parser would reject', () => {
+    const raw = '---\nname: s\nkeywords:\n- path\n-broken\n- b\nstatus: active\n---\n\nbody\n';
+    // Ground the premise: `-broken` has no space after the dash, so the parser
+    // keeps `path` only — and having reset, it never resumes for `- b`.
+    expect(parseSkillFrontmatter(raw, 'test')?.keywords).toEqual(['path']);
+
+    const out = rewriteKeywordsFrontmatter(raw, ['gamma', 'delta']);
+    expect(out).toBe(
+      '---\nname: s\nkeywords:\n- gamma\n- delta\n-broken\n- b\nstatus: active\n---\n\nbody\n',
+    );
+  });
+
+  it('#705 — a clean all-valid block is still rewritten in full', () => {
+    const raw = '---\nname: s\nkeywords:\n  - alpha\n  - beta\n  - epsilon\nstatus: active\n---\n\nbody\n';
+    const out = rewriteKeywordsFrontmatter(raw, ['gamma', 'delta']);
+    expect(out).toBe('---\nname: s\nkeywords:\n  - gamma\n  - delta\nstatus: active\n---\n\nbody\n');
+  });
+
+  it('#705 — non-list content after the block is left byte-identical', () => {
+    const raw = "---\nname: s\nkeywords:\n  - alpha\ndescription: a - dash - laden line\n---\n\nbody\n";
+    const out = rewriteKeywordsFrontmatter(raw, ['gamma']);
+    expect(out).toBe("---\nname: s\nkeywords:\n  - gamma\ndescription: a - dash - laden line\n---\n\nbody\n");
+  });
+
   it('a $-sequence in a surviving keyword does not corrupt the block form', () => {
     const raw = "---\nname: s\nkeywords:\n  - alpha\n  - beta\nstatus: active\n---\n\nbody\n";
     const out = rewriteKeywordsFrontmatter(raw, ["$'", '$&', 'gamma']);
