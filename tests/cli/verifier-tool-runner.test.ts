@@ -42,6 +42,12 @@ describe('verifier tool runner — resolutionRoots anchoring (#710)', () => {
     writeFileSync(join(projectRoot, 'src/target.ts'), ROOT_TARGET);
     writeFileSync(join(projectRoot, 'src/root-only.ts'), 'export const onlyAtRoot = true;');
     writeFileSync(join(worktree, 'src/target.ts'), WORKTREE_TARGET);
+    // Basename-collision fixture: `worktree-only.ts` exists ONLY in the sibling
+    // review root, while an unrelated file of the same basename sits at a
+    // DIFFERENT relative path under the project root.
+    mkdirSync(join(projectRoot, 'vendor'), { recursive: true });
+    writeFileSync(join(projectRoot, 'vendor/worktree-only.ts'), 'export const decoy = "DECOY_COPY";');
+    writeFileSync(join(worktree, 'src/worktree-only.ts'), 'export const real = "WORKTREE_COPY";');
     fileTools = new FileTools(new Sandbox(projectRoot));
   });
 
@@ -82,6 +88,26 @@ describe('verifier tool runner — resolutionRoots anchoring (#710)', () => {
         path: join(worktree, 'src/target.ts'),
       });
       expect(out).toContain('resolveAutoBindMode');
+    });
+
+    it('an absolute citation that exists ONLY in the sibling review root is not swapped for a same-basename decoy', async () => {
+      const run = makeRunner([worktree]);
+      const out = await run('deepseek-challenger', 'file_read', {
+        path: join(worktree, 'src/worktree-only.ts'),
+      });
+      expect(out).toContain('WORKTREE_COPY');
+      expect(out).not.toContain('DECOY_COPY');
+    });
+
+    it('resolveToolPath returns a review-root citation unchanged', async () => {
+      const access = buildVerifierFileAccess({
+        fileTools,
+        projectRoot,
+        effectiveRoots: [worktree],
+        log: noopLog,
+      });
+      const cited = join(worktree, 'src/worktree-only.ts');
+      expect(await access.resolveToolPath(cited)).toBe(cited);
     });
 
     it('file_grep scoped to a cited directory finds the worktree-only marker symbol', async () => {

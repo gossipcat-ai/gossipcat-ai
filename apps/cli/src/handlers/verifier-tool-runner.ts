@@ -61,8 +61,21 @@ function canonicalRoot(path: string): string {
   }
 }
 
+/**
+ * Case-insensitive filesystems need case-folded path compares. Mirrors
+ * `Sandbox.validatePath` so this module and the terminal sandbox gate agree
+ * on what "inside a root" means.
+ */
+const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32';
+
+function fold(p: string): string {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+}
+
 function isInsideRoot(absPath: string, root: string): boolean {
-  return absPath === root || absPath.startsWith(root.endsWith(sep) ? root : root + sep);
+  const a = fold(absPath);
+  const r = fold(root);
+  return a === r || a.startsWith(r.endsWith(sep) ? r : r + sep);
 }
 
 export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): VerifierFileAccess {
@@ -74,6 +87,13 @@ export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): Verifi
   const declaredRoots = effectiveRoots.filter(Boolean).map(canonicalRoot);
   const reviewRoot: string | undefined = declaredRoots[0];
 
+  /** True when an absolute citation already points inside a declared root. */
+  const isInsideDeclaredRoot = (filePath: string): boolean => {
+    if (!isAbsolute(filePath)) return false;
+    const abs = canonicalRoot(filePath);
+    return declaredRoots.some(r => isInsideRoot(abs, r));
+  };
+
   /**
    * Map a cited path onto the review worktree when that copy actually exists.
    * Returns undefined when there is no review root, when the path already
@@ -84,8 +104,8 @@ export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): Verifi
     if (!reviewRoot) return undefined;
     let candidate: string;
     if (isAbsolute(filePath)) {
+      if (isInsideDeclaredRoot(filePath)) return undefined;
       const abs = canonicalRoot(filePath);
-      if (declaredRoots.some(r => isInsideRoot(abs, r))) return undefined;
       const rel = relative(projectRoot, abs);
       if (!rel || rel.startsWith('..') || isAbsolute(rel)) return undefined;
       candidate = join(reviewRoot, rel);
@@ -112,6 +132,12 @@ export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): Verifi
   //   4. On ambiguity, emit a stderr warning with the chosen + all candidates
   const resolveToolPath = async (filePath: string): Promise<string> => {
     if (!filePath) return filePath;
+    // A citation already inside a declared root is authoritative — return it
+    // untouched. Routing it onward would send a SIBLING review root through a
+    // projectRoot-only `validatePath` (which throws) and into the basename
+    // search below, silently substituting an unrelated same-basename file
+    // from the project root.
+    if (isInsideDeclaredRoot(filePath)) return filePath;
     const remapped = remapToReviewRoot(filePath);
     if (remapped) return remapped;
     // Try as-is next — if Sandbox validates it, the path is inside the project root.
