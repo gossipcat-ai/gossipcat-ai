@@ -587,6 +587,7 @@ async function getModules() {
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
     SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
     MemorySearcher: (await import('@gossip/orchestrator')).MemorySearcher,
+    resolveSkill: (await import('@gossip/orchestrator')).resolveSkill,
     ...(await import('./config')),
     Keychain: (await import('./keychain')).Keychain,
   };
@@ -813,6 +814,13 @@ async function doBoot() {
   }
   const agentLookup = (id: string) => ctx.identityRegistry.get(id);
 
+  // Inject resolveSkill so relay workers can call skill_query without
+  // packages/tools importing @gossip/orchestrator (issue #715). Same
+  // circular-dependency dodge as memorySearcher above; the resolver keeps
+  // ownership of the agent-id regex and skill-name normalization.
+  const skillResolver = (agentId: string, skill: string) =>
+    m.resolveSkill(agentId, skill, process.cwd());
+
   ctx.toolServer = new m.ToolServer({
     relayUrl: ctx.relay.url,
     projectRoot: process.cwd(),
@@ -821,6 +829,7 @@ async function doBoot() {
     allowedCallers: agentConfigs.map((a: { id: string }) => a.id),
     memorySearcher,
     agentLookup,
+    skillResolver,
   });
   await ctx.toolServer.start();
 
@@ -2914,7 +2923,11 @@ export function createMcpServer(): McpServer {
           // everything pre-injected via the prompt. Added 2026-04-08 — earlier sessions
           // shipped the MCP tool but no agent could call it, see
           // memory/project_remember_tool_unreachable.md for the full back-story.
-          const tools = ['Bash', 'Glob', 'Grep', 'Read', 'Edit', 'Write', 'mcp__gossipcat__gossip_remember'];
+          // mcp__gossipcat__gossip_skill_query (issue #715) is the native twin of
+          // the relay `skill_query` worker tool: it lets a subagent pull a bound
+          // skill the contextual keyword gate withheld this dispatch, instead of
+          // working without it. Read-only — no bind/unbind path is exposed.
+          const tools = ['Bash', 'Glob', 'Grep', 'Read', 'Edit', 'Write', 'mcp__gossipcat__gossip_remember', 'mcp__gossipcat__gossip_skill_query'];
           const md = [
             '---',
             `name: ${agent.id}`,
@@ -5584,6 +5597,50 @@ export function createMcpServer(): McpServer {
     }
   );
 
+  // Native-runtime twin of the relay `skill_query` worker tool (issue #715 /
+  // #698 part 2). STRICTLY READ-ONLY: it resolves and returns skill markdown
+  // and has no bind / unbind / develop / index-mutating path. The mutating
+  // surface stays behind gossip_skills, which native subagents are not granted.
+  server.tool(
+    'gossip_skill_query',
+    'Fetch the full markdown of ONE of your bound skills that was not injected into this dispatch. The prompt lists fetchable names under "Skills available on demand". Read-only — never binds or changes your skill set.',
+    {
+      agent_id: z.string().describe('Your own agent ID (from the Identity block in your prompt)'),
+      skill: z.string().max(256).describe('Exact skill name, e.g. "trust-boundaries". Underscores and casing are normalized.'),
+    },
+    async ({ agent_id, skill }) => {
+      await boot();
+      // Same gate as gossip_remember — this argument reaches a path resolver.
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(agent_id)) {
+        return { content: [{ type: 'text' as const, text: 'Error: agent_id must match /^[a-zA-Z0-9_-]{1,64}$/' }] };
+      }
+      if (isReservedAgentId(agent_id)) {
+        return { content: [{ type: 'text' as const, text: `Error: agent_id "${agent_id}" is reserved (underscore-prefixed ids other than "_project" are not allowed)` }] };
+      }
+      if (!skill || !skill.trim()) {
+        return { content: [{ type: 'text' as const, text: 'Error: skill is required.' }] };
+      }
+
+      const projectRoot = process.cwd();
+      const { resolveSkill: resolveSkillFn } = await import('@gossip/orchestrator');
+      const { formatSkillPayload, formatSkillNotFound, recordSkillPull } = await import('@gossip/tools');
+
+      const resolved = resolveSkillFn(agent_id, skill, projectRoot);
+      if (!resolved) {
+        return { content: [{ type: 'text' as const, text: formatSkillNotFound(skill, agent_id) }] };
+      }
+
+      recordSkillPull(projectRoot, {
+        agentId: agent_id,
+        skill,
+        resolvedPath: resolved.path,
+        runtime: 'native',
+      });
+
+      return { content: [{ type: 'text' as const, text: formatSkillPayload(skill, resolved) }] };
+    }
+  );
+
   server.tool(
     'gossip_verify_memory',
     'On-demand staleness check for a memory file claim. Reads the memory file, dispatches a native haiku-researcher utility to verify the claim against current code, and returns a structured verdict (FRESH | STALE | CONTRADICTED | INCONCLUSIVE) with file:line evidence. Call before acting on any backlog item from memory. Spec: docs/specs/2026-04-08-gossip-verify-memory.md',
@@ -5745,6 +5802,7 @@ export function createMcpServer(): McpServer {
         { name: 'gossip_skills', desc: 'Manage skills. action: list, get, bind, unbind, build, develop.' },
         { name: 'gossip_config', desc: 'Manage runtime feature-gate flags in .gossip/runtime-flags.json. action: list, get, set, unset, reload.' },
         { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
+        { name: 'gossip_skill_query', desc: 'Fetch one bound skill\'s full markdown on demand (read-only). Native twin of the relay skill_query worker tool.' },
         { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
         { name: 'gossip_tools', desc: 'List available tools (this command).' },
         { name: 'gossip_guide', desc: 'Show the gossipcat handbook for humans — invariants, operator playbook, caveats, hallucination patterns, glossary. Read the docs, not LLM context.' },
