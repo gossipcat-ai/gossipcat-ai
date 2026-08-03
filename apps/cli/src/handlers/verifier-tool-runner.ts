@@ -140,8 +140,17 @@ export function buildVerifierFileAccess(opts: VerifierFileAccessOptions): Verifi
     if (isInsideDeclaredRoot(filePath)) return filePath;
     const remapped = remapToReviewRoot(filePath);
     if (remapped) return remapped;
-    // Try as-is next — if Sandbox validates it, the path is inside the project root.
-    try { sandbox.validatePath(filePath); return asProjectRootPath(filePath); } catch { /* outside root */ }
+    // Try as-is next — if Sandbox validates it AND the resolved file actually
+    // exists, the citation is a usable project-root path. The existence check is
+    // load-bearing (#711): `Sandbox.validatePath` walks up to the deepest EXISTING
+    // ancestor, so it succeeds for ANY non-escaping relative path whether or not
+    // the file is there. Without it a bare-filename citation short-circuits here,
+    // file_read reports "File not found", and the short-name search below is
+    // unreachable for in-root relative citations.
+    try {
+      const validated = sandbox.validatePath(filePath);
+      if (existsSync(validated)) return asProjectRootPath(filePath);
+    } catch { /* outside root */ }
     // Search via file_search for the bare filename, passing resolutionRoots so
     // fileSearch ranks matches inside a resolution root ahead of stray duplicates.
     const fileName = filePath.split('/').pop() ?? filePath;
