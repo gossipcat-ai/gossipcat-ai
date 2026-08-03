@@ -84,5 +84,5 @@ export function formatSkillPayload(canonicalName: string, resolved: ResolvedSkil
  */
 export function formatSkillNotFound(canonicalName: string, agentId: string): string {
   const shown = canonicalName || '<invalid>';
-  return `Skill "${shown}" not found. Searched: agent-local (.gossip/agents/${agentId}/skills), project-wide (.gossip/skills), and bundled (default-skills).`;
+  return `Skill "${shown}" not found. Searched: agent-local (.gossip/agents/${agentId}/skills), project-wide (.gossip/skills), Claude Code project skills (.claude/skills/<name>/SKILL.md), and bundled (default-skills).`;
 }

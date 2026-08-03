@@ -4649,8 +4649,8 @@ export function createMcpServer(): McpServer {
 
         if (!resolved) {
           const searched = agent_id
-            ? `agent-local (.gossip/agents/${agent_id}/skills), project-wide (.gossip/skills), and bundled (default-skills)`
-            : `project-wide (.gossip/skills) and bundled (default-skills)`;
+            ? `agent-local (.gossip/agents/${agent_id}/skills), project-wide (.gossip/skills), Claude Code project skills (.claude/skills/<name>/SKILL.md), and bundled (default-skills)`
+            : `project-wide (.gossip/skills), Claude Code project skills (.claude/skills/<name>/SKILL.md), and bundled (default-skills)`;
           return { content: [{ type: 'text' as const, text: `Skill "${skill}" not found. Searched: ${searched}.` }] };
         }
 
