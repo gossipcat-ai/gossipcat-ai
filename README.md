@@ -160,16 +160,6 @@ Dashboard enrichment (graphs, trends, session history) · local Postgres migrati
 
 Bug reports, ideas, and PRs welcome — [open an issue](https://github.com/gossipcat-ai/gossipcat-ai/issues) or ask in-session *"file a gossipcat bug report about …"*. Fork, branch, `npm test`, conventional commits; details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Star history
-
-<a href="https://www.star-history.com/?repos=gossipcat-ai%2Fgossipcat-ai&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=gossipcat-ai/gossipcat-ai&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=gossipcat-ai/gossipcat-ai&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=gossipcat-ai/gossipcat-ai&type=date&legend=top-left" width="600" />
- </picture>
-</a>
-
 ## License
 
 [MIT](LICENSE)
