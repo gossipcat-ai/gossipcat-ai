@@ -181,6 +181,12 @@ export function assemblePrompt(parts: {
   memoryDir?: string;
   lens?: string;
   skills?: string;
+  /**
+   * Pre-rendered one-line on-demand skill advertisement from
+   * `buildSkillsOnDemandLine` (issue #715). Emitted verbatim right after the
+   * SKILLS block. Empty string ⇒ omitted.
+   */
+  skillsOnDemand?: string;
   context?: string;
   sessionContext?: string;
   chainContext?: string;
@@ -233,6 +239,12 @@ export function assemblePrompt(parts: {
   // BEHAVIORAL — skills define how the agent thinks
   if (parts.skills) {
     prefix.push(wrapSkillsBlock(parts.skills));
+  }
+
+  // One-line pointer to bound-but-not-injected skills (issue #715). Sits
+  // immediately after the block it refers to; omitted entirely when empty.
+  if (parts.skillsOnDemand) {
+    prefix.push(`\n\n${parts.skillsOnDemand}`);
   }
 
   // ── SUFFIX (preserved under truncation, priority-ordered drop) ─────────

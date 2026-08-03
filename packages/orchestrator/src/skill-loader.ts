@@ -233,6 +233,43 @@ export interface LoadSkillsResult {
 }
 
 /**
+ * Drop reasons whose skills are advertised as fetchable on demand (issue #715).
+ *
+ * ONLY these two. A skill dropped for `status-failed`, `status-silent`, or
+ * `status-drift-demoted` is QUARANTINED by design — advertising it would let an
+ * agent pull back exactly the content the effectiveness pipeline just withheld.
+ * `kill-switch` / `excluded` are operator decisions, and the `*-mismatch` /
+ * `no-task-provided` reasons mean the skill does not apply to this dispatch at
+ * all. Those all stay silent.
+ */
+export const ON_DEMAND_DROP_REASONS: ReadonlySet<DroppedSkill['reason']> = new Set([
+  'below-keyword-threshold',
+  'budget-exceeded',
+] as const);
+
+/**
+ * Build the one-line on-demand skill advertisement appended after the SKILLS
+ * block (issue #715 / #698 part 2). Returns `''` when nothing is eligible, so
+ * callers can pass the result straight through and the line is simply omitted.
+ *
+ * Deliberately ONE line: this rides on every dispatch, so it is a fixed ~15
+ * token cost plus one comma-separated name per withheld skill.
+ */
+export function buildSkillsOnDemandLine(
+  dropped: DroppedSkill[],
+  runtime: 'native' | 'relay',
+): string {
+  const names = Array.from(new Set(
+    dropped.filter(d => ON_DEMAND_DROP_REASONS.has(d.reason)).map(d => d.skill),
+  )).sort();
+  if (names.length === 0) return '';
+  const tool = runtime === 'native'
+    ? 'mcp__gossipcat__gossip_skill_query(agent_id, skill)'
+    : 'skill_query(skill)';
+  return `Skills available on demand (not loaded): ${names.join(', ')} — fetch with ${tool}`;
+}
+
+/**
  * The effective skill set for an agent — the SINGLE source of truth shared by
  * the prompt builder (`loadSkills`) and the coverage-gap detector
  * (`SkillCatalog.checkCoverage`). When the skill index has slots for the agent,

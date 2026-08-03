@@ -2,7 +2,7 @@ export { MainAgent } from './main-agent';
 export { seedMemoryHygiene } from './memory-hygiene-seed';
 export type { MemoryHygieneSeedResult } from './memory-hygiene-seed';
 export { detectFormatCompliance, MAX_COMPLIANCE_INPUT } from './dispatch-pipeline';
-export { loadSkills, resolveEffectiveSkills, DEFAULT_KEYWORDS, keywordStem, resolveSkillExists, resolveSkill, resolveSharedSkill } from './skill-loader';
+export { loadSkills, resolveEffectiveSkills, DEFAULT_KEYWORDS, keywordStem, resolveSkillExists, resolveSkill, resolveSharedSkill, buildSkillsOnDemandLine, ON_DEMAND_DROP_REASONS } from './skill-loader';
 export type { LoadSkillsResult, DroppedSkill } from './skill-loader';
 export { AMBIENT_STOPWORDS, isAmbientStopword, stripAmbientStopwords, normalizeKeywordForStopwordLookup } from './keyword-stopwords';
 export { migrateSkillKeywords, rewriteKeywordsFrontmatter, LEGACY_CATEGORY_KEYWORDS } from './skill-keyword-migration';

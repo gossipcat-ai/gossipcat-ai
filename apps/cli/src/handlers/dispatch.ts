@@ -9,6 +9,7 @@ import {
   assemblePrompt,
   MAX_ASSEMBLED_PROMPT_CHARS,
   loadSkills,
+  buildSkillsOnDemandLine,
   selectLessons,
   renderLessonBlock,
   logLessonInjection,
@@ -959,6 +960,12 @@ export async function handleDispatchSingle(
         identity: buildNativeIdentity(agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResult.content || undefined,
+        // Issue #715. Safe to live inside the warm-cached skills section: this
+        // native path calls loadSkills WITHOUT dispatchTaskType, so no
+        // `*-mismatch` drops are possible and the eligible-drop set is a pure
+        // function of (bindings, loaded set) — which the cache key's skill
+        // fingerprint already discriminates.
+        skillsOnDemand: buildSkillsOnDemandLine(skillResult.dropped, 'native') || undefined,
         chainContext: chainContext || undefined,
         task,
       };
@@ -1422,6 +1429,7 @@ export async function handleDispatchParallel(
         identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResult.content || undefined,
+        skillsOnDemand: buildSkillsOnDemandLine(skillResult.dropped, 'native') || undefined, // issue #715 — see singleParts for cache rationale
         consensusSummary: consensus || undefined,
         task: def.task,
       };
@@ -1807,6 +1815,7 @@ export async function handleDispatchConsensus(
         identity: buildNativeIdentity(def.agent_id, nativeConfig.model),
         instructions: nativeConfig.instructions || undefined,
         skills: skillResultC.content || undefined,
+        skillsOnDemand: buildSkillsOnDemandLine(skillResultC.dropped, 'native') || undefined, // issue #715 — see singleParts for cache rationale
         consensusSummary: true,
         lens: lensContent || undefined,
         task: def.task,

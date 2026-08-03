@@ -5,7 +5,7 @@ import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState
 import { WorkerAgent } from './worker-agent';
 import { emitConsensusSignals } from './signal-helpers';
 import { ILLMProvider } from './llm-client';
-import { loadSkills, resolveEffectiveSkills } from './skill-loader';
+import { loadSkills, resolveEffectiveSkills, buildSkillsOnDemandLine } from './skill-loader';
 import { createAgentSkillsContentResolver } from './cross-review-skills';
 import { assemblePrompt, extractSpecReferences, buildSpecReviewEnrichment, parseSpecFrontMatter } from './prompt-assembler';
 import { AgentMemoryReader } from './agent-memory';
@@ -414,6 +414,7 @@ export class DispatchPipeline {
       memoryDir,
       lens: options?.lens,
       skills,
+      skillsOnDemand: buildSkillsOnDemandLine(skillResult.dropped, 'relay') || undefined,
       sessionContext: sessionCtx || undefined,
       chainContext: chainContext || undefined,
       consensusSummary: options?.consensus,
