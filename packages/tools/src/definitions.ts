@@ -202,4 +202,18 @@ export const MEMORY_TOOLS: ToolDefinition[] = [
   },
 ];
 
-export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS, ...VERIFY_TOOLS, ...MEMORY_TOOLS, ...IDENTITY_TOOLS];
+export const SKILL_QUERY_TOOLS: ToolDefinition[] = [
+  {
+    name: 'skill_query',
+    description: 'Fetch the full markdown of ONE of YOUR OWN bound skills that was not injected into this dispatch. The dispatch prompt lists the fetchable names under "Skills available on demand". Read-only — it never binds, unbinds, or changes your skill set. Budget: 2 calls per task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        skill: { type: 'string', description: 'Exact skill name as listed in "Skills available on demand" (e.g. "trust-boundaries"). Underscores and casing are normalized.' },
+      },
+      required: ['skill'],
+    },
+  },
+];
+
+export const ALL_TOOLS: ToolDefinition[] = [...FILE_TOOLS, ...SHELL_TOOLS, ...GIT_TOOLS, ...SKILL_TOOLS, ...VERIFY_TOOLS, ...MEMORY_TOOLS, ...IDENTITY_TOOLS, ...SKILL_QUERY_TOOLS];

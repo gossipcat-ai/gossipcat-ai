@@ -12,6 +12,9 @@ import { resolve } from 'path';
 import { canonicalizeForBoundary, validatePathInScope } from './scope';
 import { wrapMemoryEnvelope } from './memory-envelope';
 import { recordMemoryQuery } from './memory-audit';
+import { recordSkillPull } from './skill-pull-audit';
+import { formatSkillNotFound, formatSkillPayload, type SkillResolverLike } from './skill-query';
+import { truncateToBytes } from './truncate';
 
 /**
  * Structural shape of MemorySearcher from @gossip/orchestrator. Defined here as
@@ -67,34 +70,13 @@ export interface ToolServerConfig {
   perfWriter?: { appendSignal(signal: unknown): void };
   memorySearcher?: MemorySearcherLike;  // Injected from MCP boot path for memory_query
   agentLookup?: AgentLookup;             // Injected from MCP boot path for self_identity
+  skillResolver?: SkillResolverLike;     // Injected from MCP boot path for skill_query
 }
 
 function truncateAtLine(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const cut = text.lastIndexOf('\n', maxLength);
   return text.slice(0, cut !== -1 ? cut : maxLength);
-}
-
-/**
- * Truncate text so its UTF-8 byte length stays <= maxBytes, without splitting
- * a multi-byte character. Prefers cutting at the last newline in the second
- * half of the slice so the returned string ends at a clean line boundary.
- */
-function truncateToBytes(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
-  // Slice to maxBytes, then decode — the subarray may end mid-char, but
-  // TextDecoder with fatal:false replaces the incomplete sequence with U+FFFD.
-  let slice = Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
-  // Strip any trailing replacement character left by the incomplete sequence.
-  // Use the � escape (not a literal char) so a build/encoding transform
-  // can't silently break the strip and let the result exceed maxBytes.
-  slice = slice.replace(/\uFFFD$/, '');
-  // Prefer cutting at a newline in the latter half of the slice to avoid
-  // dropping a large chunk of content due to an early newline.
-  const midpoint = Math.floor(slice.length / 2);
-  const lastNl = slice.lastIndexOf('\n');
-  if (lastNl > midpoint) slice = slice.slice(0, lastNl);
-  return slice;
 }
 
 /**
@@ -127,6 +109,7 @@ export class ToolServer {
   private perfWriter?: { appendSignal(signal: unknown): void };
   private memorySearcher?: MemorySearcherLike;
   private agentLookup?: AgentLookup;
+  private skillResolver?: SkillResolverLike;
 
   constructor(config: ToolServerConfig) {
     this.allowedCallers = config.allowedCallers ? new Set(config.allowedCallers) : null;
@@ -138,6 +121,7 @@ export class ToolServer {
     this.perfWriter = config.perfWriter;
     this.memorySearcher = config.memorySearcher;
     this.agentLookup = config.agentLookup;
+    this.skillResolver = config.skillResolver;
     this.agent = new GossipAgent({
       agentId: config.agentId || 'tool-server',
       relayUrl: config.relayUrl,
@@ -432,6 +416,8 @@ export class ToolServer {
         return this.handleMemoryQuery(args as { query: string; max_results?: number | string }, callerId);
       case 'self_identity':
         return this.handleSelfIdentity(callerId);
+      case 'skill_query':
+        return this.handleSkillQuery(args as { skill: string }, callerId);
       default:
         // Unreachable: isKnownTool gate at the top of executeTool rejects
         // unknown names before validation. Kept for type-narrowing.
@@ -478,6 +464,52 @@ export class ToolServer {
     // Envelope wrap — same shape as gossip_remember. Spec Part 2 + 4.
     const emptyText = `No knowledge found for agent "${callerId}" matching query: "${query}"`;
     return wrapMemoryEnvelope(callerId, results, emptyText);
+  }
+
+  /**
+   * skill_query — return the full markdown of ONE skill resolved for the
+   * CALLING agent (issue #715 / #698 part 2). Read-only: no bind, no unbind,
+   * no index mutation. Scope is always the caller (envelope.sid via the
+   * allowedCallers gate) — an agent can never pull another agent's local
+   * skill, because the agentId handed to the resolver is never taken from the
+   * tool arguments.
+   *
+   * The resolver is `resolveSkill` injected from the MCP boot path; it owns
+   * the agent-id regex, `normalizeSkillName`, and the base-containment check,
+   * so the raw `skill` argument is never path-joined here.
+   */
+  private async handleSkillQuery(
+    args: { skill: string },
+    callerId?: string,
+  ): Promise<string> {
+    if (!this.skillResolver) {
+      return 'skill_query unavailable: tool-server has no skillResolver injected.';
+    }
+    if (!callerId) {
+      return 'skill_query requires a caller identity (envelope.sid). Refusing.';
+    }
+    const skill = (args.skill || '').toString();
+    if (!skill.trim()) return 'skill_query requires a non-empty skill name.';
+
+    let resolved: ReturnType<SkillResolverLike>;
+    try {
+      resolved = this.skillResolver(callerId, skill);
+    } catch {
+      // A resolver failure is a not-found from the agent's point of view;
+      // never surface an internal stack into the tool response.
+      resolved = null;
+    }
+    if (!resolved) return formatSkillNotFound(skill, callerId);
+
+    // Observability: successful pulls only — see skill-pull-audit.ts.
+    recordSkillPull(this.sandbox.projectRoot, {
+      agentId: callerId,
+      skill,
+      resolvedPath: resolved.path,
+      runtime: 'relay',
+    });
+
+    return formatSkillPayload(skill, resolved);
   }
 
   /**

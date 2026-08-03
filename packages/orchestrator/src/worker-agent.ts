@@ -121,14 +121,17 @@ export class WorkerAgent {
    * Per-task call budgets for introspection tools that have no business
    * being called repeatedly. memory_query is a one-shot recall (the
    * memory-retrieval skill says "one call per task is the floor"),
-   * self_identity is a fact lookup. Without a cap, an agent that gets
-   * confused can spin a turn loop calling these and burn the entire
+   * self_identity is a fact lookup, skill_query pulls a skill the keyword
+   * gate withheld (issue #715 — the prompt advertises at most a handful of
+   * names, so two pulls covers the realistic case). Without a cap, an agent
+   * that gets confused can spin a turn loop calling these and burn the entire
    * MAX_TOOL_TURNS budget on noise. Reset at the top of executeTask.
    */
   private toolCallBudget: Map<string, number> = new Map();
   private static readonly TOOL_CALL_BUDGETS: Record<string, number> = {
     memory_query: 10,
     self_identity: 3,
+    skill_query: 2,
   };
   /** Tracks whether the agent called memory_query during the current task. Reset per task. */
   private memoryQueryCalled = false;
