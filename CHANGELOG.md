@@ -4,6 +4,91 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-03
+
+The contextual-skills release. Auto-developed skills now activate by task
+relevance instead of shipping unconditionally (~79KB of reviewer prompt payload
+moved behind keyword gates), agents can pull skills on demand mid-task, and
+Claude Code project skills are readable by dispatched agents without
+duplication. Also closes two live-incident classes found this cycle — Phase-2
+cross-reviewers reading the wrong tree, and the skill index silently reverting
+external writes — plus every open dependency advisory. All issues closed at
+release time.
+
+### Upgrading
+
+1. **Full server restart** after upgrading (same caveat as 0.7.0 — an `/mcp`
+   reconnect alone does not rebuild relay worker state).
+2. **Run `node scripts/migrate-skill-index-modes.mjs`** once (it is idempotent)
+   to flip existing auto-bound skill slots to contextual under the
+   flip-only-measured policy — without it, previously bound skills keep
+   injecting unconditionally. Safe to run with the server up as of this
+   release (see the SkillIndex hardening below); on older servers it required
+   an immediate restart.
+3. **Run `gossip_setup(mode: "merge")` and reconnect** so native agents gain
+   the new `mcp__gossipcat__gossip_skill_query` tool in their rosters.
+
+### Added
+
+- **Contextual skill activation, end to end** (#675, #700, #706, PRs #704,
+  #707–#709, #722). All three category-vocabulary tables were stripped of
+  ambient repo nouns (words that measure vocabulary overlap with this repo
+  rather than task relevance — `path`, `session`, `injection`, `scoped`,
+  `dashboard`, bare `log`…), the contextual budget tiebreaker is
+  effectiveness-aware, and all three auto-bind sites honour a generated
+  skill's declared `mode: contextual`. A one-shot migration
+  (`scripts/migrate-skill-index-modes.mjs`) flips already-bound slots; skills
+  still accumulating effectiveness evidence stay permanent. Measured result:
+  fire-rate vs effectiveness went from anti-correlated (r = −0.78) to
+  positively correlated, and worst-case ambient fire rates dropped from
+  ~56–60% of briefs to ~20%.
+- **On-demand skill loading** (#698, #715, PRs #702, #718, #721). Three
+  layers: `gossip_skills(action: "get")` for the orchestrator; a budget-capped
+  `skill_query` worker tool for relay agents (identity from the connection
+  envelope — structurally unable to read a peer's skills) plus a read-only
+  `gossip_skill_query` MCP tool for native agents; and a read-only bridge that
+  makes Claude Code project skills (`.claude/skills/<name>/SKILL.md`)
+  resolvable without hand-duplication. Dispatch prompts advertise
+  available-but-not-loaded skills in one line; every pull is logged to
+  `.gossip/skill-pulls.jsonl` as evidence of what the keyword gate missed.
+  Quarantined skills (failed / silent / drift-demoted / kill-switched) are
+  never advertised **and never served** — the fetch path shares the loader's
+  exact quarantine predicate.
+
+### Fixed
+
+- **Phase-2 cross-reviewers read the review worktree, not master** (#710,
+  PR #713). Both Phase-2 tool loops now root `file_read`/`file_grep`/`git_log`
+  at `resolutionRoots[0]`, ending the wrong-tree-refutation class where a
+  cross-reviewer confidently "disproved" correct findings using measurements
+  from the stale root checkout (observed live with two different providers).
+  Two adjacent verifier false-negative generators also closed (#711, #712,
+  PR #717): the bare-filename search fallback was unreachable, and
+  `file_grep` on a file path silently returned "No matches found".
+- **SkillIndex no longer clobbers external writes** (#714, PR #716). The
+  long-lived server held the index in memory and blind-overwrote external
+  edits on its next save — observed twice reverting the mode migration.
+  Every public method now refreshes from disk when the file changed, saves
+  are atomic (temp + rename), and corruption is quarantined loudly instead of
+  silently becoming an empty index.
+- **Keyword-migration rewrites are byte-exact** (#705, PR #720): the rewrite
+  now consumes exactly what the parser reads, so malformed hand-edited list
+  lines are preserved instead of silently deleted.
+- **Signal-pipeline classification hardening** (#690, #692, #695–#697,
+  PRs #690–#701): operational-class signals are excluded from the
+  circuit-breaker streak, `signal_class` is stamped at synthesis,
+  scoring-class signals are rejected for orchestrator/reserved ids, and the
+  new `design_split` signal records an unresolved two-sided design
+  disagreement without debiting either agent.
+
+### Security
+
+- `re2` bumped to 1.26.1, clearing GHSA-6hxr-mr5r-9836 and GHSA-ff84-5f28-78qj
+  (#699).
+- `@modelcontextprotocol/sdk` bumped to 1.30.0 with `@hono/node-server`
+  pinned ≥ 2.0.5, clearing GHSA-frvp-7c67-39w9 (#703, PR #719). `npm audit`
+  is clean at release.
+
 ## [0.7.0] — 2026-07-26
 
 Adds a memory loop for operator process failures: lessons can now be recorded
