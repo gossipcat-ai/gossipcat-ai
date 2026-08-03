@@ -54,7 +54,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "re2": "^1.25.0",
     "tsconfig-paths": "^4.2.0",
     "ws": "^8.20.1"
@@ -65,6 +65,7 @@
     "fast-uri": ">=3.1.4",
     "postcss": "^8.5.18",
     "js-yaml": "^4.2.1",
-    "brace-expansion": "^5.0.8"
+    "brace-expansion": "^5.0.8",
+    "@hono/node-server": "^2.0.5"
   }
 }
