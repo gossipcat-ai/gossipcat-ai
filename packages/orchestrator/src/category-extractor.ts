@@ -9,7 +9,14 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   // origin-header are auth-boundary concerns and belong with the existing
   // authenticat/authoriz/credential keywords rather than a separate bucket.
   trust_boundaries: [/trust.?boundar/i, /authenticat/i, /authoriz/i, /impersonat/i, /identity/i, /credential/i, /\bcsrf\b/i, /sec.?fetch/i, /samesite/i, /origin.?header/i, /\bcors\b/i, /\bjwt\b/i, /session.?fixation/i],
-  injection_vectors: [/inject/i, /sanitiz/i, /escape/i, /\bxss\b/i, /sql.?inject/i, /prompt.?inject/i],
+  // #706 (ambient-noun pass on this table, following #700/PR#704 on the skill-
+  // keyword tables): bare /inject/i measured 89 corpus occurrences, ~84 of them
+  // skill/lesson/dependency injection ("injected structurally as skillResolver",
+  // "lesson auto-injection", "dependency-injected module") — the same 60/62
+  // split #700 found in DEFAULT_KEYWORDS. Genuine security-sense occurrences
+  // (header injection, argument injection, git-flag-injection, jsx HTML
+  // injection) are all multi-word and survive as qualified forms below.
+  injection_vectors: [/sanitiz/i, /escape/i, /\bxss\b/i, /sql.?inject/i, /prompt.?inject/i, /shell.?inject/i, /command.?inject/i, /header.?inject/i, /argument.?inject/i, /flag.?inject/i, /html.?inject/i],
   input_validation: [/validat/i, /input.?check/i, /type.?guard/i, /\bschema\b/i, /malform/i],
   concurrency: [/race.?condition/i, /deadlock/i, /\batomic\b/i, /concurrent/i, /\bmutex\b/i, /\btoctou\b/i],
   resource_exhaustion: [/\bdos\b/i, /unbounded/i, /memory.?leak/i, /exhaust/i, /\btimeout\b/i, /infinite.?loop/i],
@@ -23,10 +30,32 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
   // Phase 1 dev-quality extensions (consensus 09693c51-184246e5). Vocabulary
   // disjoint from the security buckets above. Word boundaries on log/monitor
   // to avoid backlog/catalog/dialog/monitor-thread false-positives.
-  observability: [/observability/i, /\blog(ging)?\b/i, /\bmetric/i, /tracing/i, /telemetry/i, /\bmonitor(ing)?\b/i, /dashboard/i, /stderr/i],
-  cli_ergonomics: [/\bcli\b/i, /\bflag\b/i, /help text/i, /error message/i, /\busage\b/i, /\bprompt\b/i, /banner/i, /spinner/i],
+  // #706: /dashboard/i fired on 152/400 docs (38.0%) — in this repo "dashboard"
+  // means gossipcat's own dashboard product/UI (`feat(dashboard): ...`), never
+  // a generic observability dashboard; zero corpus hits for the genuine sense,
+  // so it is dropped outright rather than qualified (mirrors AMBIENT_STOPWORDS
+  // `dashboard` and the sense-dominance-alone precedent set by `scoped`).
+  // `\blog(ging)?\b` conflated ambient bare `log`/`logs` (16.6% DF, almost all
+  // `mcp.log` / `git log` / `Decisions Log`) with `logging`, which is not
+  // ambient (kept in AMBIENT_STOPWORDS at 1.5% DF); split so only `logging`
+  // fires.
+  observability: [/observability/i, /\blogging\b/i, /\bmetric/i, /tracing/i, /telemetry/i, /\bmonitor(ing)?\b/i, /stderr/i],
+  // #706: bare /\bprompt\b/i fired on 38/400 docs (9.5%), all LLM-prompt-
+  // assembly machinery (`prompt-assembler.ts`, warm prompt cache, system
+  // prompt) — the exact sense AMBIENT_STOPWORDS documents for `prompt`/
+  // `prompts` ("every brief is about prompts"). Zero corpus hits for the CLI
+  // UX sense (confirmation/interactive prompts); qualified forms kept for when
+  // it does appear.
+  cli_ergonomics: [/\bcli\b/i, /\bflag\b/i, /help text/i, /error message/i, /\busage\b/i, /confirmation.?prompt/i, /interactive.?prompt/i, /banner/i, /spinner/i],
   performance: [/\blatency/i, /slow/i, /performance/i, /\bn\+1\b/i, /uncached/i, /readFileSync/i, /synchronous/i, /hot path/i],
-  testing: [/\btest(s|ing)?\b/i, /coverage/i, /\bmock\b/i, /\bfixture\b/i, /\bunit test/i, /integration test/i, /\be2e\b/i, /test suite/i],
+  // #706: bare /\btest(s|ing)?\b/i fired on 232/400 docs (58.0%) — almost all
+  // gossipcat's own jest suite ("Full suite green, 351 suites, 4774 tests").
+  // `test suite` looked qualified but measured 13/14 occurrences as the same
+  // machinery chatter ("17-case test suite with injected stubs", "no test
+  // suite"), so it is dropped too rather than kept as a false discriminator.
+  // Genuine coverage-gap findings still fire via `coverage` / `unit test` /
+  // `integration test` / `e2e` / the new `untested`.
+  testing: [/coverage/i, /\bmock\b/i, /\bfixture\b/i, /\bunit test/i, /integration test/i, /\be2e\b/i, /\buntested\b/i],
 };
 
 /**
