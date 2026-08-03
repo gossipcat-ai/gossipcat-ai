@@ -10,7 +10,7 @@
 import { readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'fs';
 import { resolve, join } from 'path';
 import { tmpdir } from 'os';
-import { resolveSkill } from '@gossip/orchestrator';
+import { resolveSkill, resolveServableSkill } from '@gossip/orchestrator';
 import { formatSkillPayload, formatSkillNotFound } from '@gossip/tools';
 import { isReservedAgentId } from '../../apps/cli/src/reserved-ids';
 
@@ -63,6 +63,27 @@ describe('gossip_skill_query registration', () => {
     expect(notFoundIdx).toBeGreaterThan(-1);
     expect(recordIdx).toBeGreaterThan(notFoundIdx);
     expect(block).toContain("runtime: 'native'");
+  });
+
+  it('routes through resolveServableSkill — the quarantine-gated resolver, never the bare one', () => {
+    const block = skillQueryBlock();
+    expect(block).toContain('resolveServableSkill(agent_id, skill, projectRoot)');
+    expect(block).not.toMatch(/\bresolveSkill\(/);
+  });
+
+  it('echoes only the canonical name — the raw skill arg never reaches output (f5/f9)', () => {
+    const block = skillQueryBlock();
+    expect(block).toContain('formatSkillNotFound(canonicalName, agent_id)');
+    expect(block).toContain('formatSkillPayload(canonicalName, resolved)');
+    expect(block).toContain('skill: canonicalName,');
+  });
+
+  it('tags native pull rows as self-attested (f11)', () => {
+    expect(skillQueryBlock()).toContain('attributed: false');
+  });
+
+  it('injects the gated resolver into the relay ToolServer, not the bare resolveSkill', () => {
+    expect(SDK_SOURCE).toContain('m.resolveServableSkill(agentId, skill, process.cwd())');
   });
 
   it('is granted to every native agent gossip_setup generates', () => {
@@ -125,5 +146,53 @@ describe('gossip_skill_query payload matches gossip_skills(action:"get")', () =>
     expect(msg).toContain('.gossip/agents/agent-a/skills');
     expect(msg).toContain('.gossip/skills');
     expect(msg).toContain('default-skills');
+  });
+});
+
+describe('gossip_skill_query quarantine gate (native path)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = realpathSync(mkdtempSync(join(tmpdir(), 'gossip-skill-query-quarantine-')));
+    mkdirSync(join(tmpDir, '.gossip', 'skills'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const write = (name: string, body: string) =>
+    writeFileSync(join(tmpDir, '.gossip', 'skills', `${name}.md`), body);
+
+  it('withholds a status: failed skill from the native path too', () => {
+    write('burned', '---\nname: burned\nstatus: failed\n---\nSECRET\n');
+    // Sanity: the bare resolver WOULD have served it — the gate is what stops it.
+    expect(resolveSkill('agent-a', 'burned', tmpDir)).not.toBeNull();
+    expect(resolveServableSkill('agent-a', 'burned', tmpDir).skill).toBeNull();
+  });
+
+  it('withholds a kill-switched propagated skill', () => {
+    write('bundled', '---\nname: bundled\npropagated: true\n---\nSECRET\n');
+    writeFileSync(
+      join(tmpDir, '.gossip', 'memory-config.json'),
+      JSON.stringify({ bundledMemories: { enabled: false, exclude: [] } }),
+    );
+    expect(resolveServableSkill('agent-a', 'bundled', tmpDir).skill).toBeNull();
+  });
+
+  it('serves a pending skill and a no-frontmatter skill', () => {
+    write('pending-one', '---\nname: pending-one\nstatus: pending\n---\nBODY\n');
+    write('bare', 'no frontmatter here\n');
+    expect(resolveServableSkill('agent-a', 'pending-one', tmpDir).skill).not.toBeNull();
+    expect(resolveServableSkill('agent-a', 'bare', tmpDir).skill).not.toBeNull();
+  });
+
+  it('returns the canonical name even when the skill is withheld or unknown', () => {
+    write('burned2', '---\nname: burned2\nstatus: failed\n---\nSECRET\n');
+    expect(resolveServableSkill('agent-a', 'BURNED_2', tmpDir).canonicalName).toBe('burned-2');
+    expect(resolveServableSkill('agent-a', 'Unknown_Thing', tmpDir)).toEqual({
+      canonicalName: 'unknown-thing',
+      skill: null,
+    });
   });
 });

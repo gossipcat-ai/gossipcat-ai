@@ -44,6 +44,34 @@ describe('skill_query per-task call budget (issue #715)', () => {
     expect(third).toContain('conversation history');
   });
 
+  it('resets the budget between tasks so a second executeTask starts fresh (f3)', async () => {
+    // executeTask is an async generator; a stub LLM that returns no tool calls
+    // finishes it in one turn without touching the relay.
+    const oneTurnLlm = {
+      async generate() { return { text: 'done', inputTokens: 0, outputTokens: 0 }; },
+    } as unknown as ILLMProvider;
+    const worker = new WorkerAgent('agent-a', oneTurnLlm, 'ws://localhost:0', ALL_TOOLS);
+    const callTool = (worker as any).callTool.bind(worker);
+
+    const drain = async () => { for await (const _ of worker.executeTask('task text')) { /* consume */ } };
+
+    // Task 1: burn the budget, confirm exhaustion.
+    await drain();
+    [callTool('skill_query', { skill: 'one' }), callTool('skill_query', { skill: 'two' })]
+      .forEach(p => p.catch(() => {}));
+    expect(await callTool('skill_query', { skill: 'three' })).toContain('budget exhausted');
+    expect((worker as any).toolCallBudget.get('skill_query')).toBe(2);
+
+    // Task 2: executeTask must clear the per-tool counters.
+    await drain();
+    expect((worker as any).toolCallBudget.get('skill_query')).toBeUndefined();
+
+    // ...and a call in the new task is admitted rather than rejected.
+    const fresh = callTool('skill_query', { skill: 'four' });
+    fresh.catch(() => {});
+    await expect(Promise.race([fresh, Promise.resolve('pending')])).resolves.toBe('pending');
+  });
+
   it('budgets each tool independently — memory_query is unaffected by skill_query usage', async () => {
     const worker = new WorkerAgent('agent-a', stubLlm, 'ws://localhost:0', ALL_TOOLS);
     const callTool = (worker as any).callTool.bind(worker);

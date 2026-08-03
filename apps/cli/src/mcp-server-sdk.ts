@@ -587,7 +587,7 @@ async function getModules() {
     PerformanceWriter: (await import('@gossip/orchestrator')).PerformanceWriter,
     SkillEngine: (await import('@gossip/orchestrator')).SkillEngine,
     MemorySearcher: (await import('@gossip/orchestrator')).MemorySearcher,
-    resolveSkill: (await import('@gossip/orchestrator')).resolveSkill,
+    resolveServableSkill: (await import('@gossip/orchestrator')).resolveServableSkill,
     ...(await import('./config')),
     Keychain: (await import('./keychain')).Keychain,
   };
@@ -814,12 +814,15 @@ async function doBoot() {
   }
   const agentLookup = (id: string) => ctx.identityRegistry.get(id);
 
-  // Inject resolveSkill so relay workers can call skill_query without
+  // Inject resolveServableSkill so relay workers can call skill_query without
   // packages/tools importing @gossip/orchestrator (issue #715). Same
   // circular-dependency dodge as memorySearcher above; the resolver keeps
-  // ownership of the agent-id regex and skill-name normalization.
+  // ownership of the agent-id regex, skill-name normalization, AND the
+  // quarantine gate shared with loadSkills. It must NOT be swapped for the bare
+  // resolveSkill — that would let agents fetch suppressed skills by name
+  // (consensus c64bedcd-a44a45e8).
   const skillResolver = (agentId: string, skill: string) =>
-    m.resolveSkill(agentId, skill, process.cwd());
+    m.resolveServableSkill(agentId, skill, process.cwd());
 
   ctx.toolServer = new m.ToolServer({
     relayUrl: ctx.relay.url,
@@ -5622,22 +5625,29 @@ export function createMcpServer(): McpServer {
       }
 
       const projectRoot = process.cwd();
-      const { resolveSkill: resolveSkillFn } = await import('@gossip/orchestrator');
+      // resolveServableSkill, NOT the bare resolveSkill — it applies the same
+      // quarantine gate loadSkills uses, so a skill the effectiveness pipeline
+      // suppressed cannot be fetched back by name.
+      const { resolveServableSkill } = await import('@gossip/orchestrator');
       const { formatSkillPayload, formatSkillNotFound, recordSkillPull } = await import('@gossip/tools');
 
-      const resolved = resolveSkillFn(agent_id, skill, projectRoot);
+      const { canonicalName, skill: resolved } = resolveServableSkill(agent_id, skill, projectRoot);
+      // Unknown and quarantined render identically — no probing the suppression set.
       if (!resolved) {
-        return { content: [{ type: 'text' as const, text: formatSkillNotFound(skill, agent_id) }] };
+        return { content: [{ type: 'text' as const, text: formatSkillNotFound(canonicalName, agent_id) }] };
       }
 
+      // agent_id here is self-attested (the caller's own argument), unlike the
+      // relay path's envelope-authenticated sid — tag the row accordingly.
       recordSkillPull(projectRoot, {
         agentId: agent_id,
-        skill,
+        skill: canonicalName,
         resolvedPath: resolved.path,
         runtime: 'native',
+        attributed: false,
       });
 
-      return { content: [{ type: 'text' as const, text: formatSkillPayload(skill, resolved) }] };
+      return { content: [{ type: 'text' as const, text: formatSkillPayload(canonicalName, resolved) }] };
     }
   );
 

@@ -474,9 +474,10 @@ export class ToolServer {
    * skill, because the agentId handed to the resolver is never taken from the
    * tool arguments.
    *
-   * The resolver is `resolveSkill` injected from the MCP boot path; it owns
-   * the agent-id regex, `normalizeSkillName`, and the base-containment check,
-   * so the raw `skill` argument is never path-joined here.
+   * The resolver is `resolveServableSkill` injected from the MCP boot path; it
+   * owns the agent-id regex, `normalizeSkillName`, the base-containment check,
+   * AND the quarantine gate shared with `loadSkills`. The raw `skill` argument
+   * is never path-joined and never echoed — only the canonical name is.
    */
   private async handleSkillQuery(
     args: { skill: string },
@@ -491,25 +492,29 @@ export class ToolServer {
     const skill = (args.skill || '').toString();
     if (!skill.trim()) return 'skill_query requires a non-empty skill name.';
 
-    let resolved: ReturnType<SkillResolverLike>;
+    let resolution: ReturnType<SkillResolverLike>;
     try {
-      resolved = this.skillResolver(callerId, skill);
+      resolution = this.skillResolver(callerId, skill);
     } catch {
       // A resolver failure is a not-found from the agent's point of view;
       // never surface an internal stack into the tool response.
-      resolved = null;
+      resolution = { canonicalName: '', skill: null };
     }
-    if (!resolved) return formatSkillNotFound(skill, callerId);
+    // Unknown and quarantined are the SAME response — an agent must not be able
+    // to probe which of its skills the effectiveness pipeline suppressed.
+    if (!resolution.skill) return formatSkillNotFound(resolution.canonicalName, callerId);
 
-    // Observability: successful pulls only — see skill-pull-audit.ts.
+    // Observability: successful pulls only — see skill-pull-audit.ts. Relay
+    // identity is envelope-authenticated, hence attributed: true.
     recordSkillPull(this.sandbox.projectRoot, {
       agentId: callerId,
-      skill,
-      resolvedPath: resolved.path,
+      skill: resolution.canonicalName,
+      resolvedPath: resolution.skill.path,
       runtime: 'relay',
+      attributed: true,
     });
 
-    return formatSkillPayload(skill, resolved);
+    return formatSkillPayload(resolution.canonicalName, resolution.skill);
   }
 
   /**

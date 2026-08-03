@@ -11,12 +11,20 @@
  * Schema (one JSON object per line):
  * {
  *   timestamp: string,               // ISO-8601
- *   agent_id: string,                // pulling agent
- *   skill: string,                   // skill name as requested
+ *   agent_id: string,                // pulling agent (see `attributed`)
+ *   skill: string,                   // CANONICAL skill name, never the raw arg
  *   resolved_path: string,           // absolute path the resolver returned
  *   runtime: 'relay' | 'native',
+ *   attributed: boolean,             // true when identity is relay-authenticated
+ *   _audit?: 'untrusted_caller',     // set when agent_id is self-attested
  *   task_id?: string                 // only when the call site has one cheaply
  * }
+ *
+ * `attributed` mirrors the gossip_remember / memory_query convention in
+ * memory-audit.ts: relay pulls carry the envelope-authenticated `sid`, while
+ * native MCP pulls take `agent_id` from the caller's own arguments and are
+ * therefore tagged `_audit: 'untrusted_caller'`. Analytics that attribute pulls
+ * to an agent must weight the two differently.
  *
  * Rotation: single-slot 5MB, mirroring memory-queries.jsonl. All IO wrapped in
  * try/catch — fail-open, never throws into the tool response.
@@ -30,9 +38,12 @@ export const MAX_SKILL_PULL_LOG_BYTES = 5 * 1024 * 1024; // 5MB
 
 export interface SkillPullEntry {
   agentId: string;
+  /** CANONICAL (normalized) skill name. Never pass the caller's raw argument. */
   skill: string;
   resolvedPath: string;
   runtime: 'relay' | 'native';
+  /** True only when the agent id was authenticated (relay envelope.sid). */
+  attributed: boolean;
   taskId?: string;
 }
 
@@ -61,7 +72,9 @@ export function recordSkillPull(projectRoot: string, entry: SkillPullEntry): voi
       skill: entry.skill,
       resolved_path: entry.resolvedPath,
       runtime: entry.runtime,
+      attributed: entry.attributed,
     };
+    if (!entry.attributed) row._audit = 'untrusted_caller';
     if (entry.taskId) row.task_id = entry.taskId;
     appendFileSync(logPath, JSON.stringify(row) + '\n');
   } catch {
