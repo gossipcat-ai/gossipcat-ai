@@ -48,6 +48,11 @@ export async function synthesizeTimeoutRound(
   projectRoot: string = process.cwd(),
 ): Promise<{ report: ConsensusReport; prompts: Array<{ system: string; user: string }> }> {
   const { ConsensusEngine, makeRoundContext } = await import('@gossip/orchestrator');
+  // Issue #737: timeout synthesis builds cross-review prompts, so this engine is
+  // citation-bearing. Surface a non-project-root before its anchors start
+  // failing. Warn-only — synthesis must not be blocked by the check.
+  const { warnIfNotProjectRoot } = await import('../config');
+  warnIfNotProjectRoot(projectRoot, 'consensus timeout synthesis');
   const round: RoundContext =
     snapshot.roundContext ?? makeRoundContext({ resolutionRoots: snapshot.resolutionRoots ?? [] });
   const engine: ConsensusEngineType = new ConsensusEngine({
