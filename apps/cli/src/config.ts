@@ -106,6 +106,52 @@ export function findConfigPath(projectRoot?: string): string | null {
   return null;
 }
 
+/**
+ * Roots already reported by {@link warnIfNotProjectRoot}. Keeps the warning to
+ * one line per distinct root for the process lifetime instead of one per
+ * dispatch — the condition is a static property of the directory, so repeating
+ * it adds noise without adding information.
+ */
+const warnedNonProjectRoots = new Set<string>();
+
+/** Test-only: clear the {@link warnIfNotProjectRoot} dedup latch. */
+export function __resetProjectRootWarnings(): void {
+  warnedNonProjectRoots.clear();
+}
+
+/**
+ * Sanity-check the directory a citation-bearing ConsensusEngine is about to
+ * treat as the project root (issue #737 direction 3).
+ *
+ * Every `ConsensusEngine` is handed `process.cwd()` as its project root. When a
+ * single relay process serves more than one repository, that cwd can be some
+ * other project (or no project at all), and the resolver then fails every
+ * citation with a message indistinguishable from "the agent made the citation
+ * up". A missing gossipcat config under the root is a cheap, high-signal proxy
+ * for "this is not a gossipcat project root" — so we say so up front, at
+ * dispatch time, instead of leaving it to be discovered by investigation.
+ *
+ * Deliberately warn-only: dispatch must still proceed. Anchor resolution is a
+ * review-quality enhancement, not a precondition for running consensus, and a
+ * throw here would break legitimate config-less invocations.
+ *
+ * @returns true when the root looks like a real project root.
+ */
+export function warnIfNotProjectRoot(projectRoot: string, context = 'consensus'): boolean {
+  if (findConfigPath(projectRoot) !== null) return true;
+  if (!warnedNonProjectRoots.has(projectRoot)) {
+    warnedNonProjectRoots.add(projectRoot);
+    console.warn(
+      `[gossipcat] ⚠ project-root sanity check failed for ${context}: no gossipcat config` +
+      ` (.gossip/config.json or gossip.agents.json) found under "${projectRoot}".` +
+      ` Citation anchors will be resolved against this directory anyway, so cited files that` +
+      ` live in a different repository will be reported to cross-reviewers as "file not found".` +
+      ` If this relay serves multiple projects, start it from the project root you are reviewing.`,
+    );
+  }
+  return false;
+}
+
 export function loadConfig(configPath: string): GossipConfig {
   const raw = readFileSync(configPath, 'utf-8');
 

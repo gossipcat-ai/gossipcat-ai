@@ -18,6 +18,7 @@ import type { RelayWarningEntry, RoundContext } from '@gossip/orchestrator';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import { captureHeadSha } from './orchestrator-precondition-runner';
+import { warnIfNotProjectRoot } from '../config';
 
 /**
  * Schedule the per-skill checkEffectiveness runner as a detached, tracked
@@ -605,6 +606,12 @@ export async function handleCollect(
         projectRoot: process.cwd(),
         getSkillIndex: () => ctx.mainAgent.getSkillIndex(),
       });
+
+      // Issue #737: this engine resolves citation anchors against process.cwd().
+      // Flag a cwd that isn't a gossipcat project root NOW, at dispatch time —
+      // otherwise every unresolved citation downstream is indistinguishable from
+      // a fabricated one. Warn-only: consensus still runs.
+      warnIfNotProjectRoot(process.cwd(), 'gossip_collect cross-review');
 
       const engine = new ConsensusEngine({
         llm: mainLlm,

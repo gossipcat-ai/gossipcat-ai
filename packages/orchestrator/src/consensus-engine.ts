@@ -62,6 +62,10 @@ const MIN_FINDINGS_PER_PEER = 2;
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
 const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 const MAX_VERIFIER_TURNS = 7;
+/** Max roots named verbatim in an unresolved-citation annotation (issue #737). */
+const ANCHOR_ROOT_DISPLAY_LIMIT = 3;
+/** Per-root character cap in that annotation — bounds cross-review prompt growth. */
+const ANCHOR_ROOT_PATH_MAX_CHARS = 120;
 
 /**
  * Verification-scoped memory directive for the Phase-2 cross-review system
@@ -193,6 +197,14 @@ export class ConsensusEngine {
    * anchorPathCache in updateWorktreeRoots.
    */
   private anchorWarnedRefs = new Set<string>();
+  /**
+   * One-shot latch for the per-round "these are the roots I am resolving
+   * against" log line (issue #737 direction 2). Emitted lazily on the first
+   * anchor resolution of the round rather than in the constructor, so rounds
+   * with no citations stay silent. Reset in updateWorktreeRoots when the root
+   * set actually changes, so the logged roots always match the set in use.
+   */
+  private anchorRootsLogged = false;
   /**
    * Per-task worktree paths discovered from TaskEntry.worktreeInfo. Used as
    * additional file-resolution roots so consensus auto-anchor can find files
@@ -394,6 +406,9 @@ export class ConsensusEngine {
       this.fileCache.clear();
       this.anchorPathCache.clear();
       this.anchorWarnedRefs.clear();
+      // The root set changed — re-arm the one-shot root log so the next anchor
+      // resolution reports the roots actually in use (issue #737).
+      this.anchorRootsLogged = false;
     }
   }
 
@@ -436,6 +451,58 @@ export class ConsensusEngine {
     return roots;
   }
 
+  /**
+   * Prompt-safe, length-capped rendering of the roots the anchor resolver
+   * searches. Root paths are already validated (absolute, containment-checked)
+   * before they reach the engine, but this string is spliced into a
+   * cross-reviewer PROMPT, so it is sanitized the same way `safeRef` is:
+   * markup/quote/newline characters stripped so a pathological path cannot
+   * forge an `<anchor>` boundary. (issue #737)
+   */
+  private describeAnchorRoots(roots: string[], maxShown = ANCHOR_ROOT_DISPLAY_LIMIT): string {
+    if (roots.length === 0) return '(none)';
+    const shown = roots
+      .slice(0, maxShown)
+      .map((r) => r.replace(/[<>"`\r\n]/g, '').slice(0, ANCHOR_ROOT_PATH_MAX_CHARS));
+    const extra = roots.length - shown.length;
+    return extra > 0 ? `${shown.join(', ')} (+${extra} more)` : shown.join(', ');
+  }
+
+  /**
+   * Reviewer-facing annotation for an unresolvable citation.
+   *
+   * Before issue #737 this was a bare "but file not found", which is
+   * indistinguishable from "the resolver was anchored at the wrong project
+   * root" — the exact failure mode when one relay process serves several
+   * repos. Naming the tried roots lets the reviewer tell a fabricated citation
+   * apart from a misconfigured resolver instead of defaulting to UNVERIFIED.
+   */
+  private anchorMissAnnotation(safeRef: string, lineNum: number): string {
+    const roots = this.getAnchorPriorityRoots();
+    return (
+      `⚠ Agent cited \`${safeRef}:${lineNum}\` but file not found` +
+      ` — resolver searched ${roots.length} root(s): ${this.describeAnchorRoots(roots)}.` +
+      ` If the file exists outside those roots the resolver is anchored to the wrong project` +
+      ` (the citation may still be correct); otherwise the citation itself is wrong.`
+    );
+  }
+
+  /**
+   * Emit the resolver's own root list exactly once per round (issue #737
+   * direction 2). Answers "which directory did the resolver think was the
+   * project root?" from a single log line, instead of requiring per-citation
+   * forensics. Goes to stderr via console.warn — stdout is the MCP transport.
+   */
+  private logAnchorRootsOnce(roots: string[]): void {
+    if (this.anchorRootsLogged) return;
+    this.anchorRootsLogged = true;
+    console.warn(
+      `[consensus-engine] anchor resolution roots for this round` +
+      ` (projectRoot=${this.config.projectRoot ?? '(unset)'}):` +
+      ` [${roots.join(', ') || '(none)'}]`,
+    );
+  }
+
   private async cachedResolve(fileRef: string): Promise<string | null> {
     if (this.pathCache.has(fileRef)) return this.pathCache.get(fileRef)!;
     const resolved = await this.resolveFilePath(fileRef);
@@ -454,6 +521,7 @@ export class ConsensusEngine {
     // Cache hit: return immediately — no warning on cache-replay (memoized null).
     if (this.anchorPathCache.has(fileRef)) return this.anchorPathCache.get(fileRef)!;
     const priorityRoots = this.getAnchorPriorityRoots();
+    this.logAnchorRootsOnce(priorityRoots);
     const resolved = await this.resolveFilePath(fileRef, { priorityRoots });
     this.anchorPathCache.set(fileRef, resolved);
     // Emit a one-time warning only on the first genuine miss (not cache-replay).
@@ -1770,7 +1838,7 @@ Return only valid JSON.${skillsBlock}`;
         // BEFORE projectRoot so reviewers see the branch version of modified files.
         const filePath = await this.cachedResolveForAnchor(fullRef) ?? await this.cachedResolveForAnchor(bareFile);
         if (!filePath) {
-          anchors.push(`⚠ Agent cited \`${safeRef}:${lineNum}\` but file not found`);
+          anchors.push(this.anchorMissAnnotation(safeRef, lineNum));
           continue;
         }
         // Defense-in-depth: warn when the resolved path falls back to projectRoot
