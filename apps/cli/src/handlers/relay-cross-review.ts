@@ -20,6 +20,8 @@ import type {
  */
 export interface TimeoutSynthesisSnapshot {
   allResults: TaskEntry[];
+  /** #738 — arms dispatched but never completed. `allResults` is completed-only. */
+  lostAgents?: readonly string[];
   relayCrossReviewEntries: CrossReviewEntry[];
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;
   nativeCrossReviewEntries: CrossReviewEntry[];
@@ -68,6 +70,7 @@ export async function synthesizeTimeoutRound(
     allEntries,
     consensusId,
     snapshot.relayCrossReviewSkipped,
+    { lostAgents: snapshot.lostAgents ?? [] },
   );
 
   // Persist report
@@ -125,7 +128,7 @@ export function startConsensusTimeout(consensusId: string): void {
     // FIX 1: read roundStartSha BEFORE delete so mid-flight check has it.
     const roundStartShaForMidFlight = current.roundStartSha;
     // Delete round BEFORE async work to prevent double-synthesis race with concurrent relay
-    const snapshot = { allResults: current.allResults, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots, roundContext: current.roundContext };
+    const snapshot = { allResults: current.allResults, lostAgents: current.lostAgents, relayCrossReviewEntries: current.relayCrossReviewEntries, relayCrossReviewSkipped: current.relayCrossReviewSkipped, nativeCrossReviewEntries: [...current.nativeCrossReviewEntries], resolutionRoots: current.resolutionRoots, roundContext: current.roundContext };
     // PR #270 v3 review (HIGH): seed the agent-id fallback BEFORE delete from
     // the EXHAUSTIVE participation set, not just the still-pending agents.
     // Covers two cases: (1) agents that never relayed (still in
@@ -329,6 +332,9 @@ export async function handleRelayCrossReview(
   const completionRoundStartSha = round.roundStartSha;
   const synthSnapshot = {
     allResults: round.allResults,
+    // #738 — round.allResults is completed-only; carry the lost arms so the
+    // final synthesis can report the true dispatched count.
+    lostAgents: round.lostAgents,
     relayCrossReviewEntries: round.relayCrossReviewEntries,
     relayCrossReviewSkipped: round.relayCrossReviewSkipped,
     nativeCrossReviewEntries: [...round.nativeCrossReviewEntries],
@@ -380,6 +386,7 @@ export async function handleRelayCrossReview(
       allCrossReviewEntries,
       synthSnapshot.consensusId,
       synthSnapshot.relayCrossReviewSkipped,
+      { lostAgents: synthSnapshot.lostAgents ?? [] },
     );
 
     // Persist report for dashboard
@@ -565,6 +572,9 @@ export function persistPendingConsensus(): void {
           id: r.id, agentId: r.agentId, task: r.task?.slice(0, 5000),
           status: r.status, result: r.result?.slice(0, 10000),
         })),
+        // #738 — persist the lost-arm ids so a /mcp reconnect doesn't silently
+        // restore a round whose coverage denominator is back to arrivals-only.
+        lostAgents: round.lostAgents ? [...round.lostAgents] : undefined,
         relayCrossReviewEntries: round.relayCrossReviewEntries,
         relayCrossReviewSkipped: round.relayCrossReviewSkipped,
         pendingNativeAgents: [...round.pendingNativeAgents],
@@ -617,6 +627,8 @@ export function restorePendingConsensus(projectRoot: string): void {
       ctx.pendingConsensusRounds.set(id, {
         consensusId: data.consensusId,
         allResults: data.allResults,
+        // Back-compat: rounds persisted before #738 have no lostAgents key.
+        lostAgents: Array.isArray(data.lostAgents) ? data.lostAgents : undefined,
         relayCrossReviewEntries: data.relayCrossReviewEntries || [],
         relayCrossReviewSkipped: data.relayCrossReviewSkipped,
         pendingNativeAgents: new Set(data.pendingNativeAgents || []),

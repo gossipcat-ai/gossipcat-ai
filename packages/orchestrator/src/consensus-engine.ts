@@ -3221,12 +3221,20 @@ Return only valid JSON.${skillsBlock}`;
    * Synthesize a consensus report from externally-provided cross-review entries.
    * Used in the two-phase flow where native agents perform their own cross-review
    * and feed results back via gossip_relay_cross_review.
+   *
+   * `options.lostAgents` (#738) — ids of arms that WERE dispatched but never
+   * produced a completed result (timed out, errored, cancelled). Every caller
+   * pre-filters `results` to `status === 'completed'` before reaching here, so
+   * without this list the coverage denominator below can only ever count arms
+   * that arrived: a lost arm was never in `results` to begin with and
+   * `consensus_coverage_degraded` could never fire for it.
    */
   async synthesizeWithCrossReview(
     results: TaskEntry[],
     crossReviewEntries: CrossReviewEntry[],
     consensusId: string,
     relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>,
+    options?: { lostAgents?: readonly string[] },
   ): Promise<ConsensusReport> {
     const report = await this.synthesize(results, crossReviewEntries, consensusId);
 
@@ -3279,15 +3287,32 @@ Return only valid JSON.${skillsBlock}`;
     // (non-empty, ~50 chars, zero analytical content) is also treated as dropped.
     const isDropped = (r: { result?: string }): boolean =>
       !r.result || r.result.trim().length === 0 || r.result.includes('[No response from');
-    const droppedAgents = results.filter(isDropped).map(r => r.agentId);
-    const received = results.length - droppedAgents.length;
-    if (results.length > 0 && droppedAgents.length > 0) {
-      const evidence = buildCoverageDegradedMessage({ received, expected: results.length, droppedAgents });
+    const emptyAgents = results.filter(isDropped).map(r => r.agentId);
+    // #738 — an arm that never arrived (timed out / errored) is dropped just as
+    // surely as one that arrived with zero content, but the caller filtered it
+    // out of `results` upstream. Fold the caller-supplied ids back in, deduped
+    // against the arms that DID arrive so a double-reporting caller cannot
+    // inflate the denominator.
+    const arrived = new Set(results.map(r => r.agentId));
+    const lostAgents = Array.from(new Set(options?.lostAgents ?? [])).filter(id => !arrived.has(id));
+    const droppedAgents = [...emptyAgents, ...lostAgents];
+    const expected = results.length + lostAgents.length;
+    const received = results.length - emptyAgents.length;
+    if (expected > 0 && droppedAgents.length > 0) {
+      const evidence = buildCoverageDegradedMessage({ received, expected, droppedAgents });
       report.signals.push({
         type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
         signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
       });
       report.summary += `\n⚠️  ${evidence}\n`;
+      if (lostAgents.length > 0) {
+        // #738 direction 3, conservative form: do NOT rewrite tag semantics for
+        // the arms that did arrive — the tagging loop has no expected-participant
+        // denominator, so a lost arm's would-be dissent is simply absent from the
+        // tally and a finding a full round would have DISPUTED can surface as
+        // confirmed/unique. Say so instead of silently presenting full coverage.
+        report.summary += `   ↳ finding tags reflect only the ${received} arm(s) that returned — dissent from ${lostAgents.join(', ')} is absent from every confirmed/disputed tally.\n`;
+      }
       // Spec §4 — warnings channel subsumes the legacy report.coverageDegraded
       // field (deleted in PR-C). The structured drop count + dropped-agent list
       // travel in the warning message. Fires after synthesize()'s drain, so
