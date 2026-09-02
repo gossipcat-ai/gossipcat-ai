@@ -22,6 +22,14 @@ export interface NativeCrossReviewPrompt {
 export interface PendingConsensusRound {
   consensusId: string;
   allResults: any[];  // TaskEntry[]
+  /**
+   * #738 — agent ids that were dispatched into this round but never produced a
+   * completed result (timed out / errored / cancelled). `allResults` above is
+   * pre-filtered to `status === 'completed'`, so without this list the
+   * consensus engine's coverage denominator cannot see a lost arm and
+   * `consensus_coverage_degraded` can never fire for one.
+   */
+  lostAgents?: string[];
   relayCrossReviewEntries: CrossReviewEntry[];
   /** Relay agents whose phase-2 cross-review failed (quota / parse / network). Surfaced in the final report. */
   relayCrossReviewSkipped?: Array<{ agentId: string; reason: string }>;

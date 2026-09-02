@@ -805,6 +805,17 @@ export async function handleCollect(
 
       // Phase 2c: Check if native agents need external dispatch
       const nativePrompts = prompts.filter((p: any) => p.isNative);
+      // #738 — every synthesis entry point below is handed a completed-only
+      // array. Capture the arms that were dispatched but never completed
+      // (timed out / failed / still running at collect time) so the engine's
+      // coverage denominator means "arms dispatched", not "arms that arrived".
+      // Mirrors the auto-signal hygiene above: synthetic `_`-prefixed buckets
+      // (e.g. `_utility`) are internal dispatches, not consensus arms.
+      const lostAgents: string[] = Array.from(new Set(
+        allResults
+          .filter((r: any) => r.status !== 'completed' && r.agentId && !String(r.agentId).startsWith('_'))
+          .map((r: any) => String(r.agentId)),
+      ));
       if (nativePrompts.length === 0) {
         // Edge case: all native agents had no completed results — synthesize immediately
         consensusReport = await engine.synthesizeWithCrossReview(
@@ -812,6 +823,7 @@ export async function handleCollect(
           relayEntries,
           consensusId,
           relayCrossReviewSkipped,
+          { lostAgents },
         );
       } else {
         // Store pending round for native agents to complete.
@@ -822,6 +834,10 @@ export async function handleCollect(
         ctx.pendingConsensusRounds.set(consensusId, {
           consensusId,
           allResults: allResults.filter((r: any) => r.status === 'completed'),
+          // #738 — carried alongside the completed-only snapshot so the
+          // deferred synthesis paths (native completion + timeout) can still
+          // report the full dispatched count.
+          lostAgents,
           relayCrossReviewEntries: relayEntries,
           relayCrossReviewSkipped,
           pendingNativeAgents: new Set(nativePrompts.map((p: any) => p.agentId)),
