@@ -231,6 +231,35 @@ export function isFindingAlreadySignaled(
   return alreadySignaled.has(composite) || alreadySignaled.has(finding.originalAgentId);
 }
 
+/**
+ * Given the taskIds a caller currently reports as `timed_out`, and the raw
+ * contents of `.gossip/agent-performance.jsonl`, return the subset that
+ * already have a `task_completed` signal on the ledger — i.e. phantom
+ * timeouts from a task that was restored as `timed_out` after an MCP
+ * reconnect/restart (`restoreRelayTasksAsFailed` / `restoreNativeTaskMap`)
+ * but had actually already finished, not real timeouts (#736).
+ *
+ * Pure and side-effect free so it's unit-testable without booting the full
+ * `handleCollect` context — the JSONL read/import stays at the call site.
+ */
+export function findPhantomTimeoutIds(
+  timedOutIds: ReadonlySet<string>,
+  perfJsonlRaw: string | undefined | null,
+): Set<string> {
+  const completed = new Set<string>();
+  if (!perfJsonlRaw || timedOutIds.size === 0) return completed;
+  for (const line of perfJsonlRaw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      if (row && row.signal === 'task_completed' && typeof row.taskId === 'string' && timedOutIds.has(row.taskId)) {
+        completed.add(row.taskId);
+      }
+    } catch { /* tolerate a torn/rotated line — skip it */ }
+  }
+  return completed;
+}
+
 export async function handleCollect(
   task_ids: string[],
   timeout_ms: number,
@@ -389,12 +418,37 @@ export async function handleCollect(
     const scopedResults = requestedIds
       ? allResults.filter((r: any) => requestedIds.includes(r.id))
       : allResults;
+    // #736: a task restored from relay-tasks.json / native-task-map after an
+    // MCP reconnect (restoreRelayTasksAsFailed / restoreNativeTaskMap) is
+    // unconditionally marked status:'timed_out', even when it actually
+    // completed before the restart and already has a `task_completed` signal
+    // on the ledger — pruneRelayTaskRecord narrows that race but can't close
+    // it entirely (a restart mid-write, or a native task, isn't covered).
+    // Cross-check the ledger before trusting 'timed_out' at face value so we
+    // don't record a `task_timeout` signal that contradicts a real
+    // `task_completed` already on disk. Scoped to 'timed_out' only — a
+    // 'completed' result with empty content legitimately gets task_empty
+    // alongside its own real task_completed, so this must not suppress that.
+    const timedOutIds = new Set(
+      scopedResults.filter((r: any) => r.status === 'timed_out').map((r: any) => r.id)
+    );
+    let completedTaskIds: Set<string> = new Set();
+    if (timedOutIds.size > 0) {
+      try {
+        const { readJsonlWithRotated } = await import('@gossip/orchestrator');
+        const perfPath = joinPath(process.cwd(), '.gossip', 'agent-performance.jsonl');
+        completedTaskIds = findPhantomTimeoutIds(timedOutIds, readJsonlWithRotated(perfPath));
+      } catch { /* best-effort — fail open: still emit task_timeout if the read fails */ }
+    }
     const failedResults = scopedResults.filter((r: any) =>
       !String(r.agentId || '').startsWith('_') &&
       (r.status === 'failed' ||
-        r.status === 'timed_out' ||
+        (r.status === 'timed_out' && !completedTaskIds.has(r.id)) ||
         (r.status === 'completed' && (!r.result || r.result.trim().length === 0 || r.result.includes('[No response from'))))
     );
+    if (completedTaskIds.size > 0) {
+      process.stderr.write(`[gossipcat] ↩️  Suppressed ${completedTaskIds.size} phantom task_timeout signal(s) — task_completed already on ledger (#736): ${[...completedTaskIds].join(', ')}\n`);
+    }
     if (failedResults.length > 0) {
       const { emitConsensusSignals } = await import('@gossip/orchestrator');
       const now = Date.now();
