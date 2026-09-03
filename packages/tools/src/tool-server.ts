@@ -505,13 +505,15 @@ export class ToolServer {
     if (!resolution.skill) return formatSkillNotFound(resolution.canonicalName, callerId);
 
     // Observability: successful pulls only — see skill-pull-audit.ts. Relay
-    // identity is envelope-authenticated, hence attributed: true.
+    // identity is envelope-authenticated, hence attributed: true. This is a
+    // Phase-1 (normal task execution) pull, not a Phase-2 cross-review pull.
     recordSkillPull(this.sandbox.projectRoot, {
       agentId: callerId,
       skill: resolution.canonicalName,
       resolvedPath: resolution.skill.path,
       runtime: 'relay',
       attributed: true,
+      phase: 'task',
     });
 
     return formatSkillPayload(resolution.canonicalName, resolution.skill);

@@ -65,6 +65,11 @@ describe('gossip_skill_query registration', () => {
     expect(block).toContain("runtime: 'native'");
   });
 
+  it('tags the pull row phase: task — this is a Phase-1 pull, not Phase-2 cross-review (#730)', () => {
+    const block = skillQueryBlock();
+    expect(block).toContain("phase: 'task'");
+  });
+
   it('routes through resolveServableSkill — the quarantine-gated resolver, never the bare one', () => {
     const block = skillQueryBlock();
     expect(block).toContain('resolveServableSkill(agent_id, skill, projectRoot)');

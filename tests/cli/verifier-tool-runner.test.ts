@@ -354,6 +354,9 @@ describe('verifier tool runner — skill_query (#728)', () => {
       skill: 'trust-boundaries',
       runtime: 'relay',
       attributed: true,
+      // Phase-2 cross-review pull, distinguishing it from Phase-1 task pulls
+      // that share the same `runtime: 'relay'` tag (#730).
+      phase: 'cross_review',
     });
     expect(rows[0].resolved_path).toContain('trust-boundaries.md');
   });
