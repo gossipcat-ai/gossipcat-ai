@@ -9,10 +9,11 @@
 //   - summaries: Map<string, string> with at least 2 agents
 //   - engine config: { llm, registryGet, verifierToolRunner? }
 
-import { ConsensusEngine, ConsensusEngineConfig, VERIFIER_TOOLS } from '../../packages/orchestrator/src/consensus-engine';
+import { ConsensusEngine, ConsensusEngineConfig, VERIFIER_TOOLS, VERIFIER_TOOL_RESULT_MAX_BYTES } from '../../packages/orchestrator/src/consensus-engine';
 import { testRound } from '../../packages/orchestrator/src/round-context';
 import { TaskEntry, LLMResponse } from '../../packages/orchestrator/src/types';
 import { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
+import { TRUNCATION_MARKER } from '../../packages/tools/src/truncate';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -394,8 +395,8 @@ describe('crossReviewForAgent — tool output truncation', () => {
     engine = new ConsensusEngine(config);
   });
 
-  it('truncates tool output > 8000 chars with "…[truncated]" suffix', async () => {
-    const bigOutput = 'x'.repeat(9000);
+  it(`truncates tool output > ${VERIFIER_TOOL_RESULT_MAX_BYTES} bytes with the shared truncation marker`, async () => {
+    const bigOutput = 'x'.repeat(VERIFIER_TOOL_RESULT_MAX_BYTES + 1000);
     const toolCallResponse: LLMResponse = {
       text: '',
       toolCalls: [{ id: 'tc-big', name: 'file_read', arguments: { path: 'big.ts' } }],
@@ -413,12 +414,14 @@ describe('crossReviewForAgent — tool output truncation', () => {
     const secondCallMessages = mockLlm.generate.mock.calls[1][0];
     const toolResultMsg = secondCallMessages.find((m: any) => m.role === 'tool');
     expect(toolResultMsg).toBeDefined();
-    expect(toolResultMsg!.content).toHaveLength(8000 + '\n…[truncated]'.length);
-    expect(String(toolResultMsg!.content).endsWith('\n…[truncated]')).toBe(true);
+    expect(Buffer.byteLength(String(toolResultMsg!.content), 'utf8')).toBeLessThanOrEqual(VERIFIER_TOOL_RESULT_MAX_BYTES);
+    expect(String(toolResultMsg!.content).endsWith(TRUNCATION_MARKER)).toBe(true);
+    // Exactly one marker occurrence — not clipped, not duplicated.
+    expect(String(toolResultMsg!.content).split(TRUNCATION_MARKER)).toHaveLength(2);
   });
 
-  it('does NOT truncate tool output of exactly 8000 chars', async () => {
-    const exactOutput = 'y'.repeat(8000);
+  it(`does NOT truncate tool output of exactly ${VERIFIER_TOOL_RESULT_MAX_BYTES} bytes`, async () => {
+    const exactOutput = 'y'.repeat(VERIFIER_TOOL_RESULT_MAX_BYTES);
     const toolCallResponse: LLMResponse = {
       text: '',
       toolCalls: [{ id: 'tc-exact', name: 'file_read', arguments: { path: 'exact.ts' } }],
@@ -438,6 +441,40 @@ describe('crossReviewForAgent — tool output truncation', () => {
     expect(toolResultMsg).toBeDefined();
     expect(toolResultMsg!.content).toBe(exactOutput);
     expect(toolResultMsg!.content).not.toContain('[truncated]');
+  });
+
+  it('preserves an already-truncated tool payload (e.g. skill_query at its own byte cap) intact, without double-truncating it (#731)', async () => {
+    // Simulate exactly what skill_query's formatSkillPayload returns once it
+    // hits SKILL_QUERY_MAX_BYTES: content truncated to its own budget, with
+    // TRUNCATION_MARKER already appended, and the WHOLE payload sitting right
+    // at (not over) VERIFIER_TOOL_RESULT_MAX_BYTES.
+    const header = '# skill: huge-skill  (resolved: .gossip/skills/huge-skill/SKILL.md)\n\n';
+    const budget = VERIFIER_TOOL_RESULT_MAX_BYTES - Buffer.byteLength(header, 'utf8') - Buffer.byteLength(TRUNCATION_MARKER, 'utf8');
+    const alreadyTruncated = header + 'z'.repeat(budget) + TRUNCATION_MARKER;
+    expect(Buffer.byteLength(alreadyTruncated, 'utf8')).toBeLessThanOrEqual(VERIFIER_TOOL_RESULT_MAX_BYTES);
+
+    const toolCallResponse: LLMResponse = {
+      text: '',
+      toolCalls: [{ id: 'tc-skill', name: 'skill_query', arguments: { skill: 'huge-skill' } }],
+    };
+    mockLlm.generate
+      .mockResolvedValueOnce(toolCallResponse)
+      .mockResolvedValueOnce({ text: VALID_CROSS_REVIEW_JSON });
+    verifierToolRunner.mockResolvedValue(alreadyTruncated);
+
+    const reviewer = makeAgent('reviewer-agent');
+    const summaries = makeSummaries('reviewer-agent', 'peer-agent');
+
+    await (engine as any).crossReviewForAgent(reviewer, summaries);
+
+    const secondCallMessages = mockLlm.generate.mock.calls[1][0];
+    const toolResultMsg = secondCallMessages.find((m: any) => m.role === 'tool');
+    expect(toolResultMsg).toBeDefined();
+    // Passed through byte-for-byte — the engine must not re-slice a payload
+    // the tool itself already truncated to the shared cap.
+    expect(toolResultMsg!.content).toBe(alreadyTruncated);
+    // Exactly one marker occurrence, not a second one stacked on top.
+    expect(String(toolResultMsg!.content).split(TRUNCATION_MARKER)).toHaveLength(2);
   });
 });
 

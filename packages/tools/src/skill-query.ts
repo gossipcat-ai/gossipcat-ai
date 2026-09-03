@@ -19,7 +19,7 @@
  * Everything echoed is the CANONICAL normalized name.
  */
 
-import { truncateToBytes } from './truncate';
+import { truncateToBytes, TRUNCATION_MARKER } from './truncate';
 
 /**
  * Byte cap on the TOTAL returned payload — header + body + truncation marker.
@@ -28,8 +28,6 @@ import { truncateToBytes } from './truncate';
  * matches the verifier-tool convention in consensus-engine.ts.
  */
 export const SKILL_QUERY_MAX_BYTES = 16 * 1024;
-
-const TRUNCATION_MARKER = '\n…[truncated]';
 
 /** Resolution result shape returned by `resolveServableSkill`. */
 export interface ResolvedSkillLike {

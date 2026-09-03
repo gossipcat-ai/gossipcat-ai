@@ -15,7 +15,7 @@ export { recordSkillPull, SKILL_PULL_LOG, MAX_SKILL_PULL_LOG_BYTES } from './ski
 export type { SkillPullEntry } from './skill-pull-audit';
 export { formatSkillPayload, formatSkillNotFound, SKILL_QUERY_MAX_BYTES } from './skill-query';
 export type { SkillResolverLike, ResolvedSkillLike } from './skill-query';
-export { truncateToBytes } from './truncate';
+export { truncateToBytes, TRUNCATION_MARKER } from './truncate';
 export { canonicalizeForBoundary, validatePathInScope, CASE_INSENSITIVE_FS } from './scope';
 export { SkillTools } from './skill-tools';
 export type { SuggestSkillArgs, GapSuggestion, GapResolution, GapEntry } from './skill-tools';

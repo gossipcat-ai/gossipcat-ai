@@ -10,6 +10,7 @@ function shortConsensusId(): string {
   return hex.slice(0, 8) + '-' + hex.slice(8, 16);
 }
 import { LLMMessage, ToolDefinition } from '@gossip/types';
+import { truncateToBytes, TRUNCATION_MARKER, SKILL_QUERY_MAX_BYTES } from '@gossip/tools';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
@@ -62,6 +63,16 @@ const MIN_FINDINGS_PER_PEER = 2;
 const VALID_ACTIONS = new Set(['agree', 'disagree', 'unverified', 'new']);
 const ANCHOR_PATTERN = /(?:[a-zA-Z]:\/)?[\w./-]+\.(ts|js|tsx|jsx|py|go|rs|java|rb|md|json|yaml|yml|toml|sh):\d+/;
 const MAX_VERIFIER_TURNS = 7;
+/**
+ * Byte cap (not char cap) for a verifier tool-call result before it's appended
+ * to the cross-review conversation. Set to skill_query's own byte cap so a
+ * payload that tool already truncated to `SKILL_QUERY_MAX_BYTES` (with its own
+ * `TRUNCATION_MARKER`) passes through untouched instead of being re-sliced by
+ * a second, character-counting cut that can clip or duplicate that marker
+ * (#731). Byte-aware via `truncateToBytes` so multi-byte UTF-8 chars aren't
+ * split either.
+ */
+export const VERIFIER_TOOL_RESULT_MAX_BYTES = SKILL_QUERY_MAX_BYTES;
 /** Max roots named verbatim in an unresolved-citation annotation (issue #737). */
 const ANCHOR_ROOT_DISPLAY_LIMIT = 3;
 /** Per-root character cap in that annotation — bounds cross-review prompt growth. */
@@ -1003,7 +1014,19 @@ Return only valid JSON.${skillsBlock}`;
             } catch (e) {
               out = `Error: ${(e as Error).message}`;
             }
-            if (out.length > 8000) out = out.slice(0, 8000) + '\n…[truncated]';
+            if (Buffer.byteLength(out, 'utf8') > VERIFIER_TOOL_RESULT_MAX_BYTES) {
+              // If the tool already truncated its own output (e.g. skill_query
+              // at SKILL_QUERY_MAX_BYTES, ending in TRUNCATION_MARKER), strip
+              // that marker before re-cutting so the result carries exactly
+              // one truncation notice instead of a clipped/duplicated one
+              // (#731). This branch is a defensive fallback: since
+              // VERIFIER_TOOL_RESULT_MAX_BYTES == SKILL_QUERY_MAX_BYTES, a
+              // skill_query payload never exceeds the cap here in the first
+              // place and passes through untouched.
+              const base = out.endsWith(TRUNCATION_MARKER) ? out.slice(0, -TRUNCATION_MARKER.length) : out;
+              const budget = VERIFIER_TOOL_RESULT_MAX_BYTES - Buffer.byteLength(TRUNCATION_MARKER, 'utf8');
+              out = budget > 0 ? truncateToBytes(base, budget) + TRUNCATION_MARKER : TRUNCATION_MARKER;
+            }
             messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content: out } as LLMMessage);
           }
         };
