@@ -141,7 +141,10 @@ describe('relay-tasks', () => {
 
       const result = ctx.nativeResultMap.get(task.id);
       expect(result?.status).toBe('timed_out');
-      expect(result?.error).toContain('MCP server restarted');
+      // #736: message must describe what was actually observed (state lost
+      // across a reconnect), not assert an unverified restart cause.
+      expect(result?.error).toContain('state lost across an MCP reconnect');
+      expect(result?.error).not.toContain('MCP server restarted during execution');
 
       expect(stderrWriteSpy).toHaveBeenCalledWith(expect.stringContaining(`Restored 1 relay task(s)`));
       expect(fs.unlinkSync).toHaveBeenCalledWith(filePath);

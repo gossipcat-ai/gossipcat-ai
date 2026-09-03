@@ -130,13 +130,25 @@ export function restoreRelayTasksAsFailed(projectRoot: string): void {
         timeoutMs: r.timeoutMs,
       });
 
-      // Immediately mark as timed_out — we can't resume WebSocket streams
+      // Immediately mark as timed_out — we can't resume WebSocket streams.
+      //
+      // NOTE (#736): the record surviving on disk only proves the in-memory
+      // pipeline state was lost across an MCP reconnect/restart — it is
+      // equally consistent with "the task actually finished but hadn't been
+      // pruned from relay-tasks.json yet" (see dispatch-pipeline.ts's
+      // pruneRelayTaskRecord, which narrows but does not eliminate that
+      // window) as with a genuine mid-flight restart. Don't assert a cause
+      // we didn't observe, and don't unconditionally push re-dispatch —
+      // re-running a task that already completed just burns quota, and
+      // re-dispatch can't help at all if the underlying failure was e.g. an
+      // auth error. collect.ts cross-checks the signal ledger before it
+      // reports this as a timeout (see task_completed guard there).
       ctx.nativeResultMap.set(r.id, {
         id: r.id,
         agentId: r.agentId,
         task: r.task,
         status: 'timed_out',
-        error: `Relay task lost — MCP server restarted during execution. Re-dispatch with gossip_run to retry.`,
+        error: `Relay task state lost across an MCP reconnect/restart — the task may have already completed. Check task history before re-dispatching with gossip_run.`,
         startedAt: r.startedAt,
         completedAt: now,
       });

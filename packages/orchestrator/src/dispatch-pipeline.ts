@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { existsSync, readFileSync, mkdirSync, realpathSync, appendFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync, appendFileSync, statSync, writeFileSync, renameSync } from 'fs';
 import { resolve as resolvePath, join } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { WorkerAgent } from './worker-agent';
@@ -586,6 +586,10 @@ export class DispatchPipeline {
                 timestamp: new Date().toISOString(),
               }) + '\n');
             } catch { /* best-effort visibility — never crash dispatch on log/write failure */ }
+            // Prune this task from relay-tasks.json now that it's actually done —
+            // stops it from looking "running" on disk if an MCP reconnect lands
+            // before the next dispatch/collect call rewrites the file (#736).
+            this.pruneRelayTaskRecord(entry.id);
             // Emit task_completed + task_tool_turns + format_compliance + finding_dropped_format
             // via shared helper — eliminates native/relay signal-pipeline drift.
             emitCompletionSignals(this.projectRoot, {
@@ -626,6 +630,10 @@ export class DispatchPipeline {
                 error: event.payload.error,
                 timestamp: new Date().toISOString(),
               }) + '\n');
+              // Prune this task from relay-tasks.json — symmetric with the
+              // FINAL_RESULT path above (#736): a failed task is equally "done",
+              // not "running", and should stop looking that way on disk.
+              this.pruneRelayTaskRecord(entry.id);
               // Emit task_completed with error:true so downstream scorers get failure-rate
               // and latency data from relay tasks (consensus bac850a6-eeb048e3, f2).
               emitCompletionSignals(this.projectRoot, {
@@ -669,6 +677,45 @@ export class DispatchPipeline {
         ...(t.resolutionRoots && t.resolutionRoots.length > 0 ? { resolutionRoots: t.resolutionRoots } : {}),
         ...(t.images && t.images.length > 0 ? { images: [...t.images] } : {}),
       }));
+  }
+
+  /**
+   * Prune a single relay task record from `.gossip/relay-tasks.json` the
+   * moment it finishes (completed or failed) — issue #736.
+   *
+   * `apps/cli/src/handlers/relay-tasks.ts:persistRelayTasks()` only ever
+   * *rewrites the whole file* from `getRunningTaskRecords()` above, and it is
+   * only called from dispatch/collect call sites, not from this completion
+   * path (this package cannot import apps/cli — that would be a package
+   * layering violation). So a relay task that finishes here stays "running"
+   * on disk until the next unrelated dispatch/collect happens to run
+   * `persistRelayTasks()` again. If an MCP reconnect/restart lands in that
+   * window, `restoreRelayTasksAsFailed()` resurrects the already-finished
+   * task as a phantom `timed_out` record, which `collect.ts` then reports as
+   * a false `task_timeout` signal even though the task genuinely completed.
+   *
+   * Uses the same raw-fs-via-`join(this.projectRoot, '.gossip', ...)` pattern
+   * as the `task-graph.jsonl` append above — the established way for this
+   * package to touch `.gossip/` without importing apps/cli. Mirrors
+   * `persistRelayTasks()`'s atomic tmp-then-rename write so a killed process
+   * never leaves a torn `relay-tasks.json` for the next boot to choke on.
+   * Best-effort: pruning is an optimization (narrows the race window to
+   * "mid-flight" tasks only), not a correctness requirement — collect.ts's
+   * own task_completed check is the correctness backstop for whatever slips
+   * through.
+   */
+  private pruneRelayTaskRecord(taskId: string): void {
+    try {
+      const relayTasksPath = join(this.projectRoot, '.gossip', 'relay-tasks.json');
+      if (!existsSync(relayTasksPath)) return;
+      const raw = JSON.parse(readFileSync(relayTasksPath, 'utf-8')) as { tasks?: Array<{ id: string }> };
+      const tasks = raw.tasks || [];
+      if (!tasks.some((t) => t.id === taskId)) return; // nothing to prune — avoid a needless write
+      const filtered = tasks.filter((t) => t.id !== taskId);
+      const tmp = `${relayTasksPath}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ tasks: filtered }));
+      renameSync(tmp, relayTasksPath);
+    } catch { /* best-effort — never crash dispatch on relay-tasks.json prune failure */ }
   }
 
   /** Get a health summary of all active tasks — for diagnostics when user asks "is it working?" */

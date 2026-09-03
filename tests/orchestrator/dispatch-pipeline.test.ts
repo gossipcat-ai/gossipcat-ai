@@ -628,4 +628,91 @@ describe('DispatchPipeline', () => {
       expect(compliance.findingCount).toBe(0);
     });
   });
+
+  describe('pruneRelayTaskRecord (#736 — prune on completion, not just next dispatch/collect)', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    function seedRelayTasksFile(tmpDir: string, records: Array<Record<string, unknown>>) {
+      const dir = path.join(tmpDir, '.gossip');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'relay-tasks.json'), JSON.stringify({ tasks: records }));
+    }
+
+    function readRelayTasksFile(tmpDir: string): { tasks: Array<{ id: string }> } {
+      return JSON.parse(fs.readFileSync(path.join(tmpDir, '.gossip', 'relay-tasks.json'), 'utf-8'));
+    }
+
+    it('removes the task record from relay-tasks.json the moment a relay task completes', async () => {
+      const tmpDir = '/tmp/gossip-prune-completed-' + Date.now();
+      const p = new DispatchPipeline({
+        projectRoot: tmpDir,
+        workers: new Map([['test-agent', mockWorker('ok')]]),
+        registryGet: () => mockRegistryGet(),
+      });
+
+      // Seed relay-tasks.json BEFORE the task resolves — simulating the record
+      // written by an earlier persistRelayTasks() call while this task was
+      // still running (dispatch.ts / collect.ts call sites).
+      const { taskId, finalResultPromise } = p.dispatch('test-agent', 'task 1');
+      seedRelayTasksFile(tmpDir, [
+        { id: taskId, agentId: 'test-agent', task: 'task 1', startedAt: Date.now(), timeoutMs: 300_000 },
+        { id: 'unrelated-task', agentId: 'other-agent', task: 'other', startedAt: Date.now(), timeoutMs: 300_000 },
+      ]);
+
+      await finalResultPromise;
+
+      const { tasks } = readRelayTasksFile(tmpDir);
+      expect(tasks.find((t) => t.id === taskId)).toBeUndefined();
+      // Unrelated in-flight records are left alone — this is a targeted prune,
+      // not a blanket rewrite from getRunningTaskRecords().
+      expect(tasks.find((t) => t.id === 'unrelated-task')).toBeDefined();
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('removes the task record from relay-tasks.json when a relay task fails', async () => {
+      const tmpDir = '/tmp/gossip-prune-failed-' + Date.now();
+      const failingWorker = {
+        executeTask: jest.fn().mockImplementation(async function* () {
+          yield { type: 'error', payload: { error: 'boom' }, timestamp: Date.now() };
+        }),
+        subscribeToBatch: jest.fn().mockResolvedValue(undefined),
+        unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined),
+      };
+      const p = new DispatchPipeline({
+        projectRoot: tmpDir,
+        workers: new Map([['test-agent', failingWorker]]),
+        registryGet: () => mockRegistryGet(),
+      });
+
+      const { taskId, finalResultPromise } = p.dispatch('test-agent', 'task 1');
+      seedRelayTasksFile(tmpDir, [
+        { id: taskId, agentId: 'test-agent', task: 'task 1', startedAt: Date.now(), timeoutMs: 300_000 },
+      ]);
+
+      await expect(finalResultPromise).rejects.toThrow('boom');
+
+      const { tasks } = readRelayTasksFile(tmpDir);
+      expect(tasks.find((t) => t.id === taskId)).toBeUndefined();
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('is a no-op (does not throw) when relay-tasks.json does not exist', async () => {
+      const tmpDir = '/tmp/gossip-prune-missing-' + Date.now();
+      const p = new DispatchPipeline({
+        projectRoot: tmpDir,
+        workers: new Map([['test-agent', mockWorker('ok')]]),
+        registryGet: () => mockRegistryGet(),
+      });
+
+      const { finalResultPromise } = p.dispatch('test-agent', 'task 1');
+      await expect(finalResultPromise).resolves.toBeDefined();
+
+      expect(fs.existsSync(path.join(tmpDir, '.gossip', 'relay-tasks.json'))).toBe(false);
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+  });
 });
