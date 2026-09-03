@@ -5637,12 +5637,15 @@ export function createMcpServer(): McpServer {
 
       // agent_id here is self-attested (the caller's own argument), unlike the
       // relay path's envelope-authenticated sid — tag the row accordingly.
+      // This is a Phase-1 (normal task execution) pull, not a Phase-2
+      // cross-review pull.
       recordSkillPull(projectRoot, {
         agentId: agent_id,
         skill: canonicalName,
         resolvedPath: resolved.path,
         runtime: 'native',
         attributed: false,
+        phase: 'task',
       });
 
       return { content: [{ type: 'text' as const, text: formatSkillPayload(canonicalName, resolved) }] };

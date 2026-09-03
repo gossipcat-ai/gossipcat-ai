@@ -261,9 +261,10 @@ export function buildVerifierToolRunner(opts: VerifierToolRunnerOptions): Verifi
     }
     if (!resolution.skill) return formatSkillNotFound(resolution.canonicalName, agentId);
 
-    // Observability: successful pulls only. The audit schema has no phase
-    // field, so the row reuses `runtime: 'relay'` — this IS the relay/LLM
-    // reviewer path. `attributed` is true because the identity is the engine's,
+    // Observability: successful pulls only. `runtime: 'relay'` still applies —
+    // this IS the relay/LLM reviewer path — but `phase: 'cross_review'` (issue
+    // #730) now distinguishes it from Phase-1 task pulls that share the same
+    // runtime tag. `attributed` is true because the identity is the engine's,
     // not a self-attested argument.
     recordSkillPull(opts.projectRoot, {
       agentId,
@@ -271,6 +272,7 @@ export function buildVerifierToolRunner(opts: VerifierToolRunnerOptions): Verifi
       resolvedPath: resolution.skill.path,
       runtime: 'relay',
       attributed: true,
+      phase: 'cross_review',
     });
     return formatSkillPayload(resolution.canonicalName, resolution.skill);
   };

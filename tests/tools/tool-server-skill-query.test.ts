@@ -293,6 +293,8 @@ describe('ToolServer skill_query (issue #715 / #698 part 2)', () => {
         resolved_path: p,
         runtime: 'relay',
         attributed: true,
+        // Phase-1 (normal task execution) pull, not Phase-2 cross-review (#730).
+        phase: 'task',
       });
       expect(typeof rows[0].timestamp).toBe('string');
       // Relay identity is envelope-authenticated — no untrusted marker.

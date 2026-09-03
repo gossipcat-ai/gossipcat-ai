@@ -17,7 +17,12 @@
  *   runtime: 'relay' | 'native',
  *   attributed: boolean,             // true when identity is relay-authenticated
  *   _audit?: 'untrusted_caller',     // set when agent_id is self-attested
- *   task_id?: string                 // only when the call site has one cheaply
+ *   task_id?: string,                // only when the call site has one cheaply
+ *   phase?: 'task' | 'cross_review'  // issue #730 — Phase-1 task pull vs Phase-2
+ *                                    // verifier cross-review pull. Optional and
+ *                                    // additive: absent on rows written before
+ *                                    // this field existed, and readers MUST
+ *                                    // treat a missing phase as 'task'.
  * }
  *
  * `attributed` mirrors the gossip_remember / memory_query convention in
@@ -45,6 +50,12 @@ export interface SkillPullEntry {
   /** True only when the agent id was authenticated (relay envelope.sid). */
   attributed: boolean;
   taskId?: string;
+  /**
+   * Phase-1 (normal task execution) vs Phase-2 (verifier cross-review) pull.
+   * Optional and additive — absence means the row predates this field and
+   * MUST be read as 'task' by any consumer.
+   */
+  phase?: 'task' | 'cross_review';
 }
 
 /**
@@ -76,6 +87,7 @@ export function recordSkillPull(projectRoot: string, entry: SkillPullEntry): voi
     };
     if (!entry.attributed) row._audit = 'untrusted_caller';
     if (entry.taskId) row.task_id = entry.taskId;
+    if (entry.phase) row.phase = entry.phase;
     appendFileSync(logPath, JSON.stringify(row) + '\n');
   } catch {
     // Best-effort — a logging failure must never break the tool call.
