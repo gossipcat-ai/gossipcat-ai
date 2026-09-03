@@ -7,6 +7,15 @@
  */
 
 /**
+ * Single source of truth for the "this payload was cut" marker. Any path that
+ * truncates tool output (skill_query, the consensus-engine verifier tool-call
+ * loop) should append exactly this string so a downstream re-truncation can
+ * detect an already-truncated payload instead of blindly re-slicing it and
+ * mangling the marker (#731).
+ */
+export const TRUNCATION_MARKER = '\n…[truncated]';
+
+/**
  * Truncate text so its UTF-8 byte length stays <= maxBytes, without splitting
  * a multi-byte character. Prefers cutting at the last newline in the second
  * half of the slice so the returned string ends at a clean line boundary.
