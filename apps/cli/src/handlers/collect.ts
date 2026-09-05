@@ -706,9 +706,25 @@ export async function handleCollect(
       // for natives so the orchestrator can dispatch them externally.
       const completedResults = allResults.filter((r: any) => r.status === 'completed');
       const hasNative = completedResults.some((r: any) => nativeAgentIds.has(r.agentId));
+      // #738 — every synthesis entry point below is handed a completed-only
+      // array. Capture the arms that were dispatched but never completed
+      // (timed out / failed / still running at collect time) so the engine's
+      // coverage denominator means "arms dispatched", not "arms that arrived".
+      // Mirrors the auto-signal hygiene above: synthetic `_`-prefixed buckets
+      // (e.g. `_utility`) are internal dispatches, not consensus arms.
+      //
+      // #746 — computed HERE, before the server-side/legacy fork, because both
+      // branches finalize a round and both need the same denominator. It used
+      // to be computed inside the legacy branch only, which is why an all-relay
+      // round (server-side Phase 2) could never report a lost arm.
+      const lostAgents: string[] = Array.from(new Set(
+        allResults
+          .filter((r: any) => r.status !== 'completed' && r.agentId && !String(r.agentId).startsWith('_'))
+          .map((r: any) => String(r.agentId)),
+      ));
       if (engine.hasPerformanceReader && !hasNative) {
         try {
-          consensusReport = await engine.runSelectedCrossReview(completedResults);
+          consensusReport = await engine.runSelectedCrossReview(completedResults, undefined, { lostAgents });
           // Success — skip legacy relay + native dispatch paths
         } catch (err) {
           process.stderr.write(`[consensus] Server-side Phase 2 failed: ${(err as Error).message} — falling back\n`);
@@ -866,17 +882,9 @@ export async function handleCollect(
 
       // Phase 2c: Check if native agents need external dispatch
       const nativePrompts = prompts.filter((p: any) => p.isNative);
-      // #738 — every synthesis entry point below is handed a completed-only
-      // array. Capture the arms that were dispatched but never completed
-      // (timed out / failed / still running at collect time) so the engine's
-      // coverage denominator means "arms dispatched", not "arms that arrived".
-      // Mirrors the auto-signal hygiene above: synthetic `_`-prefixed buckets
-      // (e.g. `_utility`) are internal dispatches, not consensus arms.
-      const lostAgents: string[] = Array.from(new Set(
-        allResults
-          .filter((r: any) => r.status !== 'completed' && r.agentId && !String(r.agentId).startsWith('_'))
-          .map((r: any) => String(r.agentId)),
-      ));
+      // #746 — `lostAgents` is now hoisted above the server-side/legacy fork
+      // (see its definition near the runSelectedCrossReview branch) so both
+      // finalization paths share one denominator. Still in scope here.
       if (nativePrompts.length === 0) {
         // Edge case: all native agents had no completed results — synthesize immediately
         consensusReport = await engine.synthesizeWithCrossReview(
