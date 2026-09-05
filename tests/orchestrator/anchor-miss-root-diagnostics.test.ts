@@ -18,7 +18,7 @@ import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engin
 import { testRound } from '../../packages/orchestrator/src/round-context';
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 
 const makeLlm = (): any => ({
   generate: jest.fn(async () => ({ text: '[]', usage: { inputTokens: 0, outputTokens: 0 } })),
@@ -65,8 +65,12 @@ describe('anchor miss diagnostics (#737)', () => {
     const out = await engine.snippetsForFinding('Rate is miscomputed at src/billing.ts:1');
 
     expect(out).toContain('but file not found');
-    // The distinguishing information: what the resolver actually searched.
-    expect(out).toContain(wrongRepo);
+    // The distinguishing information: what the resolver actually searched —
+    // rendered as a basename, never the full absolute path (issue #748: the
+    // full path would disclose the operator's filesystem layout to
+    // relay-type reviewers backed by a third-party LLM provider).
+    expect(out).toContain(basename(wrongRepo));
+    expect(out).not.toContain(wrongRepo);
     expect(out).toContain('resolver searched 1 root(s)');
     // And a hint that separates "wrong root" from "wrong citation".
     expect(out).toMatch(/anchored to the wrong project/);
@@ -83,7 +87,10 @@ describe('anchor miss diagnostics (#737)', () => {
 
     expect(out).toContain('resolver searched 2 root(s)');
     // Worktree roots are checked before projectRoot (getAnchorPriorityRoots).
-    expect(out.indexOf(worktree)).toBeLessThan(out.indexOf(wrongRepo));
+    // Basenames only — full absolute paths never reach the prompt.
+    expect(out.indexOf(basename(worktree))).toBeLessThan(out.indexOf(basename(wrongRepo)));
+    expect(out).not.toContain(worktree);
+    expect(out).not.toContain(wrongRepo);
   });
 
   it('caps the rendered root list so a many-root round cannot bloat the prompt', async () => {
@@ -155,5 +162,26 @@ describe('anchor miss diagnostics (#737)', () => {
     expect(out).toContain('weirdrepo');
     expect(out).not.toContain('<repo>');
     expect(out).not.toContain('we"ird');
+  });
+
+  it('never discloses the operator filesystem layout above a project root to the prompt (#748)', async () => {
+    // Simulate an operator whose project lives several directories deep,
+    // e.g. under a home directory — the intermediate segments (home dir
+    // name, parent dirs) must never reach a cross-review prompt that a
+    // relay-type reviewer forwards to a third-party LLM provider.
+    const operatorTree = join(root, 'Users', 'someoperator', 'Desktop');
+    const secretProject = join(operatorTree, 'secret-project-name');
+    mkdirSync(secretProject, { recursive: true });
+    const engine = makeEngine(secretProject);
+
+    const out = await engine.snippetsForFinding('See src/billing.ts:1');
+
+    expect(out).toContain('but file not found');
+    // Only the basename is disclosed...
+    expect(out).toContain('secret-project-name');
+    // ...never the full absolute path or any parent segment.
+    expect(out).not.toContain(secretProject);
+    expect(out).not.toContain('someoperator');
+    expect(out).not.toContain(join('Users', 'someoperator'));
   });
 });

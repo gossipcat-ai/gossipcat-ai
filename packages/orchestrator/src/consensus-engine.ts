@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { mkdirSync, writeFileSync, realpathSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, resolve, dirname, relative, sep, isAbsolute } from 'path';
+import { join, resolve, dirname, relative, sep, isAbsolute, basename } from 'path';
 import { log as _log } from './log';
 
 /** Generate a short consensus round ID: xxxxxxxx-xxxxxxxx (17 chars from UUID) */
@@ -469,12 +469,24 @@ export class ConsensusEngine {
    * cross-reviewer PROMPT, so it is sanitized the same way `safeRef` is:
    * markup/quote/newline characters stripped so a pathological path cannot
    * forge an `<anchor>` boundary. (issue #737)
+   *
+   * Only the final path segment (basename) is rendered — never the full
+   * absolute path. `anchorMissAnnotation` reaches a cross-review PROMPT,
+   * which for relay-type reviewers is sent to a third-party LLM provider
+   * (google/openai/deepseek). The full path discloses the operator's home
+   * directory name, project directory names, and worktree temp-dir layout
+   * to that provider; the basename alone still tells a reviewer which root
+   * (of several) the resolver tried, which is the only diagnostic value
+   * this annotation needs. (issue #748 — this is distinct from the
+   * character-stripping above, which guards against prompt-boundary
+   * injection, not disclosure.) The local-only `logAnchorRootsOnce`
+   * console.warn path is unaffected and keeps full absolute paths.
    */
   private describeAnchorRoots(roots: string[], maxShown = ANCHOR_ROOT_DISPLAY_LIMIT): string {
     if (roots.length === 0) return '(none)';
     const shown = roots
       .slice(0, maxShown)
-      .map((r) => r.replace(/[<>"`\r\n]/g, '').slice(0, ANCHOR_ROOT_PATH_MAX_CHARS));
+      .map((r) => basename(r).replace(/[<>"`\r\n]/g, '').slice(0, ANCHOR_ROOT_PATH_MAX_CHARS));
     const extra = roots.length - shown.length;
     return extra > 0 ? `${shown.join(', ')} (+${extra} more)` : shown.join(', ');
   }
