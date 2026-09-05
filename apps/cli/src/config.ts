@@ -120,8 +120,50 @@ export function __resetProjectRootWarnings(): void {
 }
 
 /**
+ * Registered agent IDs declared by a gossipcat config file, or `null` when that
+ * cannot be determined cheaply and safely (unreadable file, non-JSON legacy
+ * form, malformed JSON, or no `agents` object). `null` means "no evidence" —
+ * every caller must fail OPEN on it, never treat it as "zero agents". Issue #747.
+ */
+function readRegisteredAgentIds(configPath: string): readonly string[] | null {
+  try {
+    // Only the JSON forms are parsed here. The YAML variants are handled by the
+    // full loader and are not worth a parser dependency for a warning heuristic.
+    if (!configPath.endsWith('.json')) return null;
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+    const agents = parsed?.agents;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return null;
+    const ids = Object.keys(agents);
+    return ids.length > 0 ? ids : null;
+  } catch {
+    // Fail open: a warning heuristic must never turn a bad config file into an
+    // error on a path whose only job is to print advice.
+    return null;
+  }
+}
+
+/**
+ * True when the config found under the root is strong evidence of a DIFFERENT
+ * project than the round being synthesized: it registers agents, and not one of
+ * them is participating in this round. Issue #747.
+ *
+ * Fails open (returns false) whenever the evidence is incomplete — no expected
+ * IDs supplied, or the config's agent registry could not be read.
+ */
+function isForeignProjectConfig(
+  configPath: string,
+  expectedAgentIds?: readonly string[],
+): boolean {
+  if (!expectedAgentIds || expectedAgentIds.length === 0) return false;
+  const registered = readRegisteredAgentIds(configPath);
+  if (registered === null) return false;
+  const registeredSet = new Set(registered);
+  return !expectedAgentIds.some((id) => registeredSet.has(id));
+}
+
+/**
  * Sanity-check the directory a citation-bearing ConsensusEngine is about to
- * treat as the project root (issue #737 direction 3).
+ * treat as the project root (issue #737 direction 3, extended by issue #747).
  *
  * Every `ConsensusEngine` is handed `process.cwd()` as its project root. When a
  * single relay process serves more than one repository, that cwd can be some
@@ -131,19 +173,40 @@ export function __resetProjectRootWarnings(): void {
  * for "this is not a gossipcat project root" — so we say so up front, at
  * dispatch time, instead of leaving it to be discovered by investigation.
  *
+ * Config-presence alone only catches "no project", never "the WRONG project"
+ * (#747): a relay whose cwd is project A silently passed the check while
+ * synthesizing a round that is actually about project B. When the caller can
+ * name the agents actually in the round, a config whose registered `agents`
+ * keys share ZERO overlap with them is strong evidence of exactly that case,
+ * and is reported the same way. Callers that cannot supply the round's agent
+ * IDs keep the original config-exists-only behavior.
+ *
  * Deliberately warn-only: dispatch must still proceed. Anchor resolution is a
  * review-quality enhancement, not a precondition for running consensus, and a
  * throw here would break legitimate config-less invocations.
  *
- * @returns true when the root looks like a real project root.
+ * @param expectedAgentIds Agent IDs participating in the round being
+ *   synthesized. Optional; omitting it (or passing an empty list) disables the
+ *   wrong-project heuristic rather than failing the check.
+ * @returns true when the root looks like the right project root.
  */
-export function warnIfNotProjectRoot(projectRoot: string, context = 'consensus'): boolean {
-  if (findConfigPath(projectRoot) !== null) return true;
+export function warnIfNotProjectRoot(
+  projectRoot: string,
+  context = 'consensus',
+  expectedAgentIds?: readonly string[],
+): boolean {
+  const configPath = findConfigPath(projectRoot);
+  const foreign = configPath !== null && isForeignProjectConfig(configPath, expectedAgentIds);
+  if (configPath !== null && !foreign) return true;
+
   if (!warnedNonProjectRoots.has(projectRoot)) {
     warnedNonProjectRoots.add(projectRoot);
+    const cause = foreign
+      ? `the gossipcat config found there ("${configPath}") registers no agent from this round` +
+        ` (round agents: ${(expectedAgentIds ?? []).join(', ')}), so it belongs to a different project`
+      : `no gossipcat config (.gossip/config.json or gossip.agents.json) found under "${projectRoot}"`;
     console.warn(
-      `[gossipcat] ⚠ project-root sanity check failed for ${context}: no gossipcat config` +
-      ` (.gossip/config.json or gossip.agents.json) found under "${projectRoot}".` +
+      `[gossipcat] ⚠ project-root sanity check failed for ${context}: ${cause}.` +
       ` Citation anchors will be resolved against this directory anyway, so cited files that` +
       ` live in a different repository will be reported to cross-reviewers as "file not found".` +
       ` If this relay serves multiple projects, start it from the project root you are reviewing.`,

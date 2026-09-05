@@ -53,8 +53,15 @@ export async function synthesizeTimeoutRound(
   // Issue #737: timeout synthesis builds cross-review prompts, so this engine is
   // citation-bearing. Surface a non-project-root before its anchors start
   // failing. Warn-only — synthesis must not be blocked by the check.
+  // Issue #747: also pass the round's own agent IDs (completed arms plus any
+  // dispatched-but-lost ones), so a cwd holding a DIFFERENT project's config is
+  // caught too, not only a cwd holding no config at all.
   const { warnIfNotProjectRoot } = await import('../config');
-  warnIfNotProjectRoot(projectRoot, 'consensus timeout synthesis');
+  const roundAgentIds = [
+    ...snapshot.allResults.map((r) => r.agentId),
+    ...(snapshot.lostAgents ?? []),
+  ].filter((id): id is string => typeof id === 'string' && id.length > 0);
+  warnIfNotProjectRoot(projectRoot, 'consensus timeout synthesis', roundAgentIds);
   const round: RoundContext =
     snapshot.roundContext ?? makeRoundContext({ resolutionRoots: snapshot.resolutionRoots ?? [] });
   const engine: ConsensusEngineType = new ConsensusEngine({
