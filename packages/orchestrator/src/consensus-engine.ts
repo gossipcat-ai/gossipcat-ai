@@ -3146,10 +3146,17 @@ Return only valid JSON.${skillsBlock}`;
    * Requires `config.performanceReader` — throws if not set.
    * Emits a `partial_review` RoundWarning on the report if any finding received
    * fewer than K cross-reviewers (K = 3 for critical, 2 for all others).
+   *
+   * `options.lostAgents` (#746) — ids of arms dispatched into this round that
+   * never produced a completed result. Same contract as
+   * `synthesizeWithCrossReview`'s option of the same name: the caller hands
+   * `results` in completed-only form, so the lost ids have to travel separately
+   * or `consensus_coverage_degraded` can never fire on this path.
    */
   async runSelectedCrossReview(
     results: TaskEntry[],
     externalConsensusId?: string,
+    options?: { lostAgents?: readonly string[] },
   ): Promise<ConsensusReport> {
     const { performanceReader } = this.config;
     // Generate (or accept caller-provided) consensusId ONCE and thread it
@@ -3208,6 +3215,7 @@ Return only valid JSON.${skillsBlock}`;
       // No structured findings — fall back to synthesize with no cross-review entries
       _log('consensus', 'runSelectedCrossReview: no structured findings extracted; synthesizing without cross-review');
       const report = await this.synthesize(results, [], consensusId);
+      this.surfaceCoverageDegraded(report, results, consensusId, options?.lostAgents);
       this.surfaceZeroTagBanner(report);
       return report;
     }
@@ -3224,6 +3232,7 @@ Return only valid JSON.${skillsBlock}`;
       // Spec §4 — the warnings channel SUBSUMES the legacy report.partialReview
       // field (deleted in PR-C). Fires after synthesize()'s drain.
       this.appendReportWarning(report, 'partial_review', 'no cross-reviewers selected — every finding is under-reviewed (0 of target K)');
+      this.surfaceCoverageDegraded(report, results, consensusId, options?.lostAgents);
       this.surfaceZeroTagBanner(report);
       return report;
     }
@@ -3287,6 +3296,7 @@ Return only valid JSON.${skillsBlock}`;
     );
 
     const report = await this.synthesize(results, allCrossReviewEntries, consensusId);
+    this.surfaceCoverageDegraded(report, results, consensusId, options?.lostAgents);
     if (partialReview) {
       // Spec §4 — warnings channel subsumes the legacy report.partialReview
       // field (deleted in PR-C). At least one finding got fewer than its
@@ -3306,6 +3316,71 @@ Return only valid JSON.${skillsBlock}`;
 
     this.surfaceZeroTagBanner(report);
     return report;
+  }
+
+  /**
+   * Surface round-level coverage degradation (0-char dropouts, e.g. Gemini
+   * MALFORMED_FUNCTION_CALL, plus arms that never arrived at all). Adds ONE
+   * round-level `consensus_coverage_degraded` signal alongside the per-task
+   * auto-signal at collect.ts:178.
+   *
+   * #746 — this MUST be shared by every Phase-2 finalization path. It used to
+   * live inline in `synthesizeWithCrossReview`, which is only reached when at
+   * least one arm is native; the server-side path
+   * (`hasPerformanceReader && !hasNative`, collect.ts) finalizes through
+   * `runSelectedCrossReview` → `synthesize` and therefore could never fire the
+   * detector — the exact #738 failure class on a second call path. Both paths
+   * now call this method, so an all-relay round with a lost arm degrades
+   * identically to a native one.
+   *
+   * `lostAgentIds` — ids of arms that WERE dispatched but never produced a
+   * completed result (timed out, errored, cancelled). Every caller pre-filters
+   * `results` to `status === 'completed'` before reaching synthesis, so without
+   * this list the coverage denominator can only ever count arms that arrived.
+   */
+  private surfaceCoverageDegraded(
+    report: ConsensusReport,
+    results: TaskEntry[],
+    consensusId: string,
+    lostAgentIds?: readonly string[],
+  ): void {
+    // The substring match mirrors collect.ts:178 so the Gemini sentinel
+    // "[No response from Gemini: ...]" (non-empty, ~50 chars, zero analytical
+    // content) is also treated as dropped.
+    const isDropped = (r: { result?: string }): boolean =>
+      !r.result || r.result.trim().length === 0 || r.result.includes('[No response from');
+    const emptyAgents = results.filter(isDropped).map(r => r.agentId);
+    // #738 — an arm that never arrived (timed out / errored) is dropped just as
+    // surely as one that arrived with zero content, but the caller filtered it
+    // out of `results` upstream. Fold the caller-supplied ids back in, deduped
+    // against the arms that DID arrive so a double-reporting caller cannot
+    // inflate the denominator.
+    const arrived = new Set(results.map(r => r.agentId));
+    const lostAgents = Array.from(new Set(lostAgentIds ?? [])).filter(id => !arrived.has(id));
+    const droppedAgents = [...emptyAgents, ...lostAgents];
+    const expected = results.length + lostAgents.length;
+    const received = results.length - emptyAgents.length;
+    if (expected === 0 || droppedAgents.length === 0) return;
+
+    const evidence = buildCoverageDegradedMessage({ received, expected, droppedAgents });
+    report.signals.push({
+      type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
+      signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
+    });
+    report.summary += `\n⚠️  ${evidence}\n`;
+    if (lostAgents.length > 0) {
+      // #738 direction 3, conservative form: do NOT rewrite tag semantics for
+      // the arms that did arrive — the tagging loop has no expected-participant
+      // denominator, so a lost arm's would-be dissent is simply absent from the
+      // tally and a finding a full round would have DISPUTED can surface as
+      // confirmed/unique. Say so instead of silently presenting full coverage.
+      report.summary += `   ↳ finding tags reflect only the ${received} arm(s) that returned — dissent from ${lostAgents.join(', ')} is absent from every confirmed/disputed tally.\n`;
+    }
+    // Spec §4 — warnings channel subsumes the legacy report.coverageDegraded
+    // field (deleted in PR-C). The structured drop count + dropped-agent list
+    // travel in the warning message. Callers invoke this AFTER synthesize()'s
+    // drain, so it writes to both round + report.
+    this.appendReportWarning(report, 'coverage_degraded', evidence);
   }
 
   /**
@@ -3371,45 +3446,7 @@ Return only valid JSON.${skillsBlock}`;
       report.summary = report.summary.split(`${internalConsensusId}:`).join(`${consensusId}:`);
     }
 
-    // Surface round-level coverage degradation (0-char dropouts, e.g. Gemini
-    // MALFORMED_FUNCTION_CALL). Adds ONE round-level signal alongside the
-    // per-task auto-signal at collect.ts:178. The substring match mirrors
-    // collect.ts:178 so the Gemini sentinel "[No response from Gemini: ...]"
-    // (non-empty, ~50 chars, zero analytical content) is also treated as dropped.
-    const isDropped = (r: { result?: string }): boolean =>
-      !r.result || r.result.trim().length === 0 || r.result.includes('[No response from');
-    const emptyAgents = results.filter(isDropped).map(r => r.agentId);
-    // #738 — an arm that never arrived (timed out / errored) is dropped just as
-    // surely as one that arrived with zero content, but the caller filtered it
-    // out of `results` upstream. Fold the caller-supplied ids back in, deduped
-    // against the arms that DID arrive so a double-reporting caller cannot
-    // inflate the denominator.
-    const arrived = new Set(results.map(r => r.agentId));
-    const lostAgents = Array.from(new Set(options?.lostAgents ?? [])).filter(id => !arrived.has(id));
-    const droppedAgents = [...emptyAgents, ...lostAgents];
-    const expected = results.length + lostAgents.length;
-    const received = results.length - emptyAgents.length;
-    if (expected > 0 && droppedAgents.length > 0) {
-      const evidence = buildCoverageDegradedMessage({ received, expected, droppedAgents });
-      report.signals.push({
-        type: 'consensus', taskId: '', consensusId, signal: 'consensus_coverage_degraded',
-        signal_class: 'operational', agentId: '_round', evidence, timestamp: new Date().toISOString(),
-      });
-      report.summary += `\n⚠️  ${evidence}\n`;
-      if (lostAgents.length > 0) {
-        // #738 direction 3, conservative form: do NOT rewrite tag semantics for
-        // the arms that did arrive — the tagging loop has no expected-participant
-        // denominator, so a lost arm's would-be dissent is simply absent from the
-        // tally and a finding a full round would have DISPUTED can surface as
-        // confirmed/unique. Say so instead of silently presenting full coverage.
-        report.summary += `   ↳ finding tags reflect only the ${received} arm(s) that returned — dissent from ${lostAgents.join(', ')} is absent from every confirmed/disputed tally.\n`;
-      }
-      // Spec §4 — warnings channel subsumes the legacy report.coverageDegraded
-      // field (deleted in PR-C). The structured drop count + dropped-agent list
-      // travel in the warning message. Fires after synthesize()'s drain, so
-      // write to both round + report.
-      this.appendReportWarning(report, 'coverage_degraded', evidence);
-    }
+    this.surfaceCoverageDegraded(report, results, consensusId, options?.lostAgents);
 
     // Surface zero-tag agents via the shared idempotent helper (deduplicated from
     // the inline block that previously lived here). Mirrors the coverage_degraded
