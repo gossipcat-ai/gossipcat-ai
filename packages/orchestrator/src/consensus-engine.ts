@@ -10,7 +10,7 @@ function shortConsensusId(): string {
   return hex.slice(0, 8) + '-' + hex.slice(8, 16);
 }
 import { LLMMessage, ToolDefinition } from '@gossip/types';
-import { truncateToBytes, TRUNCATION_MARKER, SKILL_QUERY_MAX_BYTES } from '@gossip/tools';
+import { truncateVerifierToolResult, SKILL_QUERY_MAX_BYTES } from '@gossip/tools';
 import { ILLMProvider } from './llm-client';
 import { AgentConfig, TaskEntry } from './types';
 import { ConsensusReport, ConsensusFinding, ConsensusNewFinding, ConsensusSignal, CrossReviewEntry, RelayWarningEntry } from './consensus-types';
@@ -1014,19 +1014,10 @@ Return only valid JSON.${skillsBlock}`;
             } catch (e) {
               out = `Error: ${(e as Error).message}`;
             }
-            if (Buffer.byteLength(out, 'utf8') > VERIFIER_TOOL_RESULT_MAX_BYTES) {
-              // If the tool already truncated its own output (e.g. skill_query
-              // at SKILL_QUERY_MAX_BYTES, ending in TRUNCATION_MARKER), strip
-              // that marker before re-cutting so the result carries exactly
-              // one truncation notice instead of a clipped/duplicated one
-              // (#731). This branch is a defensive fallback: since
-              // VERIFIER_TOOL_RESULT_MAX_BYTES == SKILL_QUERY_MAX_BYTES, a
-              // skill_query payload never exceeds the cap here in the first
-              // place and passes through untouched.
-              const base = out.endsWith(TRUNCATION_MARKER) ? out.slice(0, -TRUNCATION_MARKER.length) : out;
-              const budget = VERIFIER_TOOL_RESULT_MAX_BYTES - Buffer.byteLength(TRUNCATION_MARKER, 'utf8');
-              out = budget > 0 ? truncateToBytes(base, budget) + TRUNCATION_MARKER : TRUNCATION_MARKER;
-            }
+            // Byte-aware, idempotent truncation shared with collect.ts's legacy
+            // two-phase relay cross-review tool loop (#731, #749) — see
+            // truncateVerifierToolResult for why this can't be hand-rolled here.
+            out = truncateVerifierToolResult(out, VERIFIER_TOOL_RESULT_MAX_BYTES);
             messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content: out } as LLMMessage);
           }
         };

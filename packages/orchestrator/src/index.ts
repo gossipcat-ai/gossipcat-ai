@@ -159,7 +159,7 @@ export {
 } from './signal-aggregate-index';
 export type { SignalAggregateIndexData, SignalAggregateBucket } from './signal-aggregate-index';
 export type { AgentScore } from './performance-reader';
-export { ConsensusEngine } from './consensus-engine';
+export { ConsensusEngine, VERIFIER_TOOL_RESULT_MAX_BYTES } from './consensus-engine';
 export type { ConsensusEngineConfig } from './consensus-engine';
 export { validateResolutionRoot, parseWorktreePorcelain, listWorktreePaths, gitCommonDir, hashPath, GIT_ENV } from './validate-resolution-root';
 export type { ValidationResult } from './validate-resolution-root';
