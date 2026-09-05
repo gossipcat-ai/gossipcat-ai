@@ -665,7 +665,15 @@ export async function handleCollect(
       // Flag a cwd that isn't a gossipcat project root NOW, at dispatch time —
       // otherwise every unresolved citation downstream is indistinguishable from
       // a fabricated one. Warn-only: consensus still runs.
-      warnIfNotProjectRoot(process.cwd(), 'gossip_collect cross-review');
+      // Issue #747: the round's own agent IDs make the check catch a cwd that is
+      // some OTHER gossipcat project's root — config-presence alone passes there.
+      warnIfNotProjectRoot(
+        process.cwd(),
+        'gossip_collect cross-review',
+        allResults
+          .map((r: any) => r.agentId)
+          .filter((id: any): id is string => typeof id === 'string' && id.length > 0),
+      );
 
       const engine = new ConsensusEngine({
         llm: mainLlm,
