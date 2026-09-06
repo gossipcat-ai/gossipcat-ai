@@ -7,8 +7,8 @@ import { startConsensusTimeout, persistPendingConsensus } from './relay-cross-re
 import { persistRelayTasks } from './relay-tasks';
 import { seedRecentConsensusTaskIds } from './native-tasks';
 import { trackLifecycleTask } from '../lifecycle-tasks';
-import { FILE_TOOLS, FileTools, Sandbox } from '@gossip/tools';
-import { MemorySearcher } from '@gossip/orchestrator';
+import { FILE_TOOLS, FileTools, Sandbox, truncateVerifierToolResult } from '@gossip/tools';
+import { MemorySearcher, VERIFIER_TOOL_RESULT_MAX_BYTES } from '@gossip/orchestrator';
 import type { PromptFormat } from './dispatch';
 import { discoverVerifier, type VerifierBinding } from './auto-verify-discovery';
 import { buildGatedCrossReviewSkillsResolver } from './cross-review-skill-gate';
@@ -803,7 +803,11 @@ export async function handleCollect(
             } catch (e) {
               out = `Error: ${(e as Error).message}`;
             }
-            if (out.length > 8000) out = out.slice(0, 8000) + '\n…[truncated]';
+            // Byte-aware, idempotent truncation shared with consensus-engine.ts's
+            // verifier tool-call loop (#731, #749) — see truncateVerifierToolResult
+            // for why a hand-rolled char-based slice here re-introduces the same
+            // UTF-8 surrogate-pair-splitting bug #731 already fixed once.
+            out = truncateVerifierToolResult(out, VERIFIER_TOOL_RESULT_MAX_BYTES);
             messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content: out });
           }
         };

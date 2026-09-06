@@ -36,3 +36,27 @@ export function truncateToBytes(text: string, maxBytes: number): string {
   if (lastNl > midpoint) slice = slice.slice(0, lastNl);
   return slice;
 }
+
+/**
+ * Truncate a verifier tool-call result (file_read / file_grep / skill_query,
+ * etc.) so it fits within `maxBytes`, byte-aware and idempotent against
+ * re-truncation.
+ *
+ * If `out` already ends with `TRUNCATION_MARKER` (e.g. skill_query already
+ * truncated its own output at its byte cap), the existing marker is stripped
+ * before re-cutting so the result carries exactly one truncation notice
+ * instead of a clipped/duplicated one. Byte-aware via `truncateToBytes` so
+ * multi-byte UTF-8 sequences are never split mid-character.
+ *
+ * This is the single source of truth for verifier tool-result truncation —
+ * every call site that trims a tool result before handing it back to a
+ * reviewer LLM must go through this function instead of hand-rolling its own
+ * cap, or the two copies silently drift apart (#731, reintroduced via a
+ * second hand-rolled loop and fixed again in #749).
+ */
+export function truncateVerifierToolResult(out: string, maxBytes: number): string {
+  if (Buffer.byteLength(out, 'utf8') <= maxBytes) return out;
+  const base = out.endsWith(TRUNCATION_MARKER) ? out.slice(0, -TRUNCATION_MARKER.length) : out;
+  const budget = maxBytes - Buffer.byteLength(TRUNCATION_MARKER, 'utf8');
+  return budget > 0 ? truncateToBytes(base, budget) + TRUNCATION_MARKER : TRUNCATION_MARKER;
+}
