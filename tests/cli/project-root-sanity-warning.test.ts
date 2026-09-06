@@ -17,7 +17,7 @@ import { makeRoundContext } from '@gossip/orchestrator';
 import type { TaskEntry } from '@gossip/orchestrator';
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 
 describe('warnIfNotProjectRoot (#737)', () => {
   let tmp: string;
@@ -260,9 +260,14 @@ describe('citation-bearing round anchored at the wrong project root (#737)', () 
     expect(rootLogs[0]).toContain(`projectRoot=${wrongRoot}`);
 
     // (1) the reviewer-facing prompt distinguishes "wrong root" from "bad citation".
+    // The prompt reaches relay-type reviewers backed by a third-party LLM
+    // provider, so only the basename is disclosed there — never the full
+    // absolute path (issue #748). The full path is fine in (2)/(3) above,
+    // which are local-only console.warn output.
     const all = prompts.map((p) => `${p.system}\n${p.user}`).join('\n');
     expect(all).toContain('but file not found');
-    expect(all).toContain(wrongRoot);
+    expect(all).toContain(basename(wrongRoot));
+    expect(all).not.toContain(wrongRoot);
     expect(all).toContain('anchored to the wrong project');
     expect(all).not.toContain(realRepo);
   });
