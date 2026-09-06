@@ -315,6 +315,7 @@ try {
   if (stalenessResult.stale) logStalenessToMcpLog(stalenessResult, process.cwd());
 } catch { /* never break boot */ }
 import { restoreNativeTaskMap, handleNativeRelay, spawnTimeoutWatcher, scheduleNativeTaskEviction, UTILITY_RESULT_TTL_MS } from './handlers/native-tasks';
+import { resolveSessionSummaryReentry, type SessionSummaryReentry } from './handlers/session-save-reentry';
 import { handleDispatchSingle, handleDispatchParallel, handleDispatchConsensus, detectLostDispatchWarnings } from './handlers/dispatch';
 import { buildIntrospectionPrompt, appendIntrospection } from './handlers/ask-back';
 import {
@@ -5148,20 +5149,40 @@ export function createMcpServer(): McpServer {
     async ({ notes, force, _utility_task_id }) => {
       await boot();
 
+      // #745 convergence guard: the re-entry call is the ONLY thing that
+      // finalizes the save, and it hinges on the caller echoing back an opaque
+      // id. When `_utility_task_id` is dropped, the already-relayed summarizer
+      // result is invisible to the code below and the handler mints a brand-new
+      // utility task instead — dispatch → relay → dispatch, forever. Reconcile
+      // against the server's own record of the in-flight save first so the loop
+      // terminates regardless of what the client remembers.
+      const _reentry: SessionSummaryReentry = _utility_task_id
+        ? {}
+        : resolveSessionSummaryReentry({
+            pendingTaskIds: _pendingSessionData.keys(),
+            getResult: (id) => ctx.nativeResultMap.get(id),
+            hasPendingTask: (id) => ctx.nativeTaskMap.has(id),
+          });
+      const _adoptedTaskId = _reentry.adoptTaskId;
+      const _resolvedTaskId = _utility_task_id || _adoptedTaskId;
+      if (_adoptedTaskId) {
+        process.stderr.write(`[gossipcat] session_save: adopting relayed summary [${_adoptedTaskId}] — _utility_task_id was not passed on the re-call\n`);
+      }
+
       // Re-entry fast path: retrieve stashed data, skip re-gathering
-      if (_utility_task_id) {
-        const stashed = _pendingSessionData.get(_utility_task_id);
-        _pendingSessionData.delete(_utility_task_id);
+      if (_resolvedTaskId) {
+        const stashed = _pendingSessionData.get(_resolvedTaskId);
+        _pendingSessionData.delete(_resolvedTaskId);
         const summaryData = stashed ?? { gossip: '', consensus: '', performance: '', gitLog: '', notes };
 
         // Utility-guard: detect prompt-injection drift in the sub-agent.
-        const _guardBefore = _utilityGuardSnapshots.get(_utility_task_id);
-        _utilityGuardSnapshots.delete(_utility_task_id);
+        const _guardBefore = _utilityGuardSnapshots.get(_resolvedTaskId);
+        _utilityGuardSnapshots.delete(_resolvedTaskId);
         if (_guardBefore !== undefined) {
-          checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'session_summary', _utility_task_id);
+          checkUnexpectedChanges(_guardBefore, captureGitStatus(), 'session_summary', _resolvedTaskId);
         }
 
-        const utilityResult = ctx.nativeResultMap.get(_utility_task_id);
+        const utilityResult = ctx.nativeResultMap.get(_resolvedTaskId);
         const { MemoryWriter } = await import('@gossip/orchestrator');
         const writer = new MemoryWriter(process.cwd());
         try { if (ctx.mainAgent.getLLM()) writer.setSummaryLlm(ctx.mainAgent.getLLM()); } catch {}
@@ -5177,11 +5198,11 @@ export function createMcpServer(): McpServer {
             artifacts = await writer.prepareSessionArtifacts(summaryData);
           }
         } else {
-          process.stderr.write(`[gossipcat] Native session summary utility ${_utility_task_id} failed/timed out, falling back to LLM\n`);
+          process.stderr.write(`[gossipcat] Native session summary utility ${_resolvedTaskId} failed/timed out, falling back to LLM\n`);
           artifacts = await writer.prepareSessionArtifacts(summaryData);
         }
-        ctx.nativeResultMap.delete(_utility_task_id);
-        ctx.nativeTaskMap.delete(_utility_task_id);
+        ctx.nativeResultMap.delete(_resolvedTaskId);
+        ctx.nativeTaskMap.delete(_resolvedTaskId);
 
         const summary = await writeArtifactsInOrder(artifacts);
 
@@ -5250,7 +5271,10 @@ export function createMcpServer(): McpServer {
           wf(j(process.cwd(), '.gossip', 'agents', '_project', 'memory', 'session-gossip.jsonl'), '');
         } catch { /* best-effort */ }
 
-        return { content: [{ type: 'text' as const, text: `Session saved.\n\n${summary}` }] };
+        const adoptedNote = _adoptedTaskId
+          ? ` (adopted relayed summary [${_adoptedTaskId}] — the re-call omitted _utility_task_id)`
+          : '';
+        return { content: [{ type: 'text' as const, text: `Session saved.${adoptedNote}\n\n${summary}` }] };
       }
 
       // Refuse-gate: block session_save while native tasks or consensus rounds are still in flight.
@@ -5425,20 +5449,28 @@ export function createMcpServer(): McpServer {
       // Native utility branch: dispatch Agent() for session summary instead of calling LLM directly
       if (ctx.nativeUtilityConfig && !_utility_task_id) {
         const { system, user } = writer.getSessionSummaryPrompt(summaryData);
-        const taskId = randomUUID().slice(0, 8);
+        // #745: a save that reaches here while an earlier summarizer is still
+        // awaiting its relay (only possible via force: true — the refuse-gate
+        // blocks it otherwise) re-issues the ORIGINAL task id instead of
+        // minting a second summarizer, so a dropped `_utility_task_id` can
+        // never fan out an unbounded chain of orphaned _utility tasks.
+        const reusedTaskId = _reentry.inFlightTaskId;
+        const taskId = reusedTaskId ?? randomUUID().slice(0, 8);
         // Stash gathered data so re-entry doesn't need to re-gather
         _pendingSessionData.set(taskId, summaryData);
         _utilityGuardSnapshots.set(taskId, captureGitStatus());
         const UTILITY_TTL_MS = 120_000;
-        ctx.nativeTaskMap.set(taskId, {
-          agentId: '_utility',
-          task: 'session_summary',
-          startedAt: Date.now(),
-          timeoutMs: UTILITY_TTL_MS,
-          utilityType: 'session_summary',
-        });
-        try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'session_summary'); } catch { /* best-effort */ }
-        spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+        if (!reusedTaskId) {
+          ctx.nativeTaskMap.set(taskId, {
+            agentId: '_utility',
+            task: 'session_summary',
+            startedAt: Date.now(),
+            timeoutMs: UTILITY_TTL_MS,
+            utilityType: 'session_summary',
+          });
+          try { ctx.mainAgent.recordNativeTask(taskId, '_utility', 'session_summary'); } catch { /* best-effort */ }
+          spawnTimeoutWatcher(taskId, ctx.nativeTaskMap.get(taskId)!);
+        }
         // Stash eviction: session_summary results go to ctx.nativeResultMap
         // (swept at NATIVE_TASK_TTL_MS, 2h) — align the stash lifetime to match.
         setTimeout(() => {
