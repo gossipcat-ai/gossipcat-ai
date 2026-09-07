@@ -4,6 +4,59 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-09-07
+
+Consensus-correctness patch release. Closes every open Dependabot advisory
+and six live-incident classes found during a retrospective post-merge review
+of the previous cycle's own fixes — including two that were themselves
+introduced by that cycle (a coverage-degraded blind spot on the server-side
+Phase-2 path, and a second copy of the double-truncation bug the prior
+release had only half-fixed). All issues and advisories closed at release
+time.
+
+### Fixed
+
+- **`consensus_coverage_degraded` couldn't see a timed-out arm** (#738,
+  PR #740) — the coverage-denominator fix from the prior cycle didn't cover
+  the server-side Phase-2 (all-relay) synthesis path; #746 (PR #750) closes
+  that gap so both paths now share one coverage-degraded detector.
+- **Anchor resolver misdiagnosed wrong-root citations as fabricated** (#737,
+  PR #741) — cross-review prompts now name the roots actually searched
+  instead of a bare "file not found". Two follow-ups: #747 (PR #751) makes
+  the project-root sanity check detect a *wrong* gossipcat project, not only
+  a *missing* one; #748 (PR #752) stops the same diagnostic from leaking full
+  absolute filesystem paths (home directory, project directory, worktree
+  temp paths) to third-party model providers — only the basename is
+  disclosed now.
+- **Relay tasks could resurrect as phantom `task_timeout` after an MCP
+  reconnect** (#736, PR #742), even when the task had actually completed.
+- **Verifier tool results were double-truncated** (#731, PR #743) — the
+  engine's blanket char cap ran on top of tool-level byte caps, corrupting
+  or duplicating truncation markers. #749 (PR #753) found and closed a
+  second, independent copy of the same bug in the legacy collect.ts path
+  the first fix never touched; both paths now share one truncation helper.
+- **Skill-pull audit rows couldn't distinguish Phase-1 task pulls from
+  Phase-2 cross-review pulls** (#730, PR #744).
+- **`gossip_session_save` could loop forever instead of converging** (#745,
+  PR #755) — if a client dropped the `_utility_task_id` re-entry argument,
+  the server had no memory a summarizer had already run and re-dispatched on
+  every call. It now adopts a completed-but-unconsumed summary instead of
+  re-dispatching.
+
+### Security
+
+- Patched every open Dependabot advisory (12 total) via tightened npm
+  `overrides` on transitive dependencies — no direct `package.json`
+  dependency changes:
+  - `fast-uri` → `^4.1.4` (5 advisories), `ip-address` → `^10.7.0` (3),
+    `js-yaml` → `^4.3.2` (1), PR #739.
+  - `qs` → `^6.16.0` (2), `browserslist` → `^4.28.9` (1), PR #754.
+
+### Upgrading
+
+No config or restart caveats beyond the usual — a full server restart after
+upgrading is always recommended so relay worker state rebuilds cleanly.
+
 ## [0.8.0] — 2026-08-03
 
 The contextual-skills release. Auto-developed skills now activate by task

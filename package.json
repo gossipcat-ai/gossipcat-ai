@@ -1,6 +1,6 @@
 {
   "name": "gossipcat",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Multi-agent orchestration for Claude Code — parallel review, consensus, adaptive dispatch",
   "mcpName": "io.github.ataberk-xyz/gossipcat",
   "repository": {
@@ -65,7 +65,8 @@
     "fast-uri": "^4.1.4",
     "postcss": "^8.5.18",
     "js-yaml": "^4.3.2",
-    "brace-expansion": "^5.0.8",
+    "brace-expansion": "^5.0.9",
+    "nanoid": "^3.3.18",
     "@hono/node-server": "^2.0.5",
     "qs": "^6.16.0",
     "browserslist": "^4.28.9"
