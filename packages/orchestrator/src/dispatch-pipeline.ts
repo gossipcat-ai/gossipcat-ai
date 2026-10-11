@@ -84,6 +84,8 @@ type TrackedTask = TaskEntry & {
      * with image attachments. Relay tasks do not resume after reconnect.
      */
     images?: string[];
+    /** Set once the externally-stopped terminal record was persisted (runTask). */
+    stopRecorded?: boolean;
 };
 
 /**
@@ -546,7 +548,10 @@ export class DispatchPipeline {
       const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
-        if (entry.status !== 'running') break; // Do not resurrect cancelled/timed-out tasks.
+        // Cancelled/timed out externally (cancelRunningTasks / collect): resource
+        // cleanup already ran there. Stop consuming without resurrecting the
+        // task and settle with the real reason, not the generic stream error.
+        if (entry.status !== 'running') throw this.settleExternallyStopped(entry);
         entry.lastEventAt = Date.now();
         switch (event.type) {
           case TaskStreamEventType.PROGRESS:
@@ -652,6 +657,7 @@ export class DispatchPipeline {
             break;
         }
       }
+      if (entry.status !== 'running') throw this.settleExternallyStopped(entry);
       throw new Error('Task stream ended without a final result or error.');
     };
 
@@ -706,6 +712,33 @@ export class DispatchPipeline {
    * own task_completed check is the correctness backstop for whatever slips
    * through.
    */
+  /**
+   * Terminal bookkeeping for a task whose status was flipped away from
+   * 'running' by cancelRunningTasks() or a collect timeout while its stream
+   * was still live. Those paths already released scope/worktree/roots, so this
+   * only persists one `task.cancelled` record and prunes relay-tasks.json.
+   * No completion signals are emitted (the task produced no result, and
+   * collect.ts owns timeout signalling) — so nothing is double-recorded.
+   * Idempotent via `stopRecorded`.
+   */
+  private settleExternallyStopped(entry: TrackedTask): Error {
+    const reason = entry.error || 'Task stopped';
+    if (!entry.stopRecorded) {
+      entry.stopRecorded = true;
+      try {
+        const duration = (entry.completedAt ?? Date.now()) - entry.startedAt;
+        log(`⏹ relay ← ${entry.agentId} [${entry.id}] stopped (${(duration / 1000).toFixed(1)}s) — ${reason}`);
+        const taskGraphPath = join(this.projectRoot, '.gossip', 'task-graph.jsonl');
+        rotateJsonlIfNeeded(taskGraphPath);
+        appendFileSync(taskGraphPath, JSON.stringify({
+          type: 'task.cancelled', taskId: entry.id, reason, duration, timestamp: new Date().toISOString(),
+        }) + '\n');
+      } catch { /* best-effort visibility */ }
+      this.pruneRelayTaskRecord(entry.id);
+    }
+    return new Error(reason);
+  }
+
   private pruneRelayTaskRecord(taskId: string): void {
     try {
       const relayTasksPath = join(this.projectRoot, '.gossip', 'relay-tasks.json');

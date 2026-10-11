@@ -31,9 +31,24 @@ test('HTTP queue survives actual restart, resumes thread, and deduplicates tasks
 test('duplicate daemon cannot take ownership of the live queue',async()=>{
  const second=spawn(process.execPath,[bundle,root],{env:{...process.env,GOSSIP_CODEX_BIN:fake,GOSSIP_CODEX_WEB:'0',NODE_PATH:resolve('node_modules')},stdio:'ignore'});
  const code=await new Promise<number|null>(r=>second.once('exit',r));expect(code).not.toBe(0);
- const health=await codexBridgeRequest(root,'GET','/health');expect(health.pid).toBe(server.pid);expect(readFileSync(join(root,'.gossip/codex-bridge/owner.pid'),'utf8')).toBe(String(server.pid));
+ const health=await codexBridgeRequest(root,'GET','/health');expect(health.pid).toBe(server.pid);expect(JSON.parse(readFileSync(join(root,'.gossip/codex-bridge/owner.pid'),'utf8')).pid).toBe(server.pid);
 });
 test('rejects unconfigured agents and returns explicit missing-task errors',async()=>{
  await expect(codexBridgeRequest(root,'POST','/jobs',{id:'one',agentId:'unknown',task:'inspect',instructions:''})).rejects.toThrow('not configured');
  await expect(codexBridgeRequest(root,'GET','/jobs/missing')).rejects.toThrow('Unknown bridge task');
+});
+test('GET /jobs is a bounded summary page; per-job GET keeps the full result',async()=>{
+ const input={id:'one',agentId:'codex-sol',task:'inspect',instructions:'read only'};
+ await codexBridgeRequest(root,'POST','/jobs',input);await wait('one');
+ const page=await codexBridgeRequest(root,'GET','/jobs?limit=1');expect(page).toMatchObject({total:1,limit:1,offset:0});
+ expect(page.jobs[0]).toMatchObject({id:'one',status:'completed',hasResult:true});expect(page.jobs[0].terminal).toBeUndefined();expect(page.jobs[0].task).toBeUndefined();
+ expect((await codexBridgeRequest(root,'GET','/jobs/one')).terminal.payload.result).toBe('verified result');
+ await expect(codexBridgeRequest(root,'GET','/jobs?limit=abc')).rejects.toThrow('Invalid limit');
+});
+test('stale or reused-pid owner locks do not block startup',async()=>{
+ await stop(server);const lock=join(root,'.gossip/codex-bridge/owner.pid');
+ for(const content of ['', 'garbage', '-5', JSON.stringify({pid:process.pid,startedAt:'Thu Jan  1 00:00:00 1970',token:'old'})]){
+  writeFileSync(lock,content);server=await start();expect(JSON.parse(readFileSync(lock,'utf8')).pid).toBe(server.pid);await stop(server);
+ }
+ server=await start();
 });

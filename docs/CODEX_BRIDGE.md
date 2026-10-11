@@ -40,7 +40,7 @@ gossip_codex_bridge(action:"collect", task_id:"dönen görev kimliği")
 gossip_codex_bridge(action:"cancel", task_id:"dönen görev kimliği")
 ```
 
-`gossip_codex_bridge(action:"collect")` tüm kalıcı kayıtları döndürür. MCP bağlantısı kesilmiş olsa bile tamamlanan sonuçlar bu araçla geri alınabilir. MCP'nin normal görev belleği yeniden bağlantıda kaybolabildiğinden, eski görev kimliklerinin sonuçlarını bu kurtarma aracıyla okuyun. Mevcut bekleyen worker bağlantısı açıksa sonuç otomatik normal collect'e döner.
+`gossip_codex_bridge(action:"collect")` (task_id olmadan) en yeni 50 görevin sınırlı özetini döndürür (durum, zaman, hata özeti; sonuç metni yok). Tam sonuç için `task_id` verin. Socket API'de `GET /jobs?limit=&offset=` sayfalı özet listesi (en fazla 200), `GET /jobs/<id>` tam sonuç, `GET /conversation` ise son 100 görevi alanları kırpılmış olarak döndürür. MCP bağlantısı kesilmiş olsa bile tamamlanan sonuçlar bu araçla geri alınabilir. MCP'nin normal görev belleği yeniden bağlantıda kaybolabildiğinden, eski görev kimliklerinin sonuçlarını bu kurtarma aracıyla okuyun. Mevcut bekleyen worker bağlantısı açıksa sonuç otomatik normal collect'e döner.
 
 ## Yeniden başlatma ve iptal
 
@@ -52,7 +52,9 @@ gossip_codex_bridge(action:"cancel", task_id:"dönen görev kimliği")
 - İptal ve collect zaman aşımı daemon'a iletilir; geç gelen sonuç iptal edilmiş görevin üzerine yazılamaz.
 - MCP worker kapanışı daemon'daki işi iptal etmeden bağlantıyı bırakır; sonuç kalıcı kuyruğa yazılır. Servisi durdurmak o anda çalışan işi başarısız yapar, bekleyen işleri korur.
 
-`.gossip/codex-bridge/job-<task-id>.json` görev bağlamını ve sonucu içerir; `sessions.json` ajan–Codex oturum eşlemesini tutar. Görev kimlikleri Gossipcat'in sekiz karakterli kimlikleriyle uyumludur. Kayıt sınırı 5000 görevdir; sistem sınırda açık hata verir. CLI görev zaman aşımı 5 dakikadır. Yazma ve görsel görevleri desteklenmez.
+`.gossip/codex-bridge/job-<task-id>.json` görev bağlamını ve sonucu içerir; `sessions.json` ajan–Codex oturum eşlemesini tutar. Görev kimlikleri Gossipcat'in sekiz karakterli kimlikleriyle uyumludur. Görevler yeniden başlatmada `createdAt` (eşitlikte kimlik) sırasıyla yüklenir; kuyruk FIFO çalışır. Saklama: bitmiş (completed/failed) görevler 14 günden eskiyse veya bitmiş görev sayısı 500'ü aşarsa en eskiden başlanarak silinir; bekleyen/çalışan görevlere asla dokunulmaz. Silinen bir görev kimliği unutulur, aynı kimlik yeniden gönderilirse yeniden çalışır. Budamadan sonra hâlâ 5000 kayıt varsa (hepsi canlı) sistem açık hata verir. Okunamayan `sessions.json` veya görev dosyası başlatmayı durdurmaz; `*.corrupt` adıyla kenara alınır ve hata günlüğüne yazılır.
+
+`owner.pid` kilidi `{pid, startedAt, token}` JSON'udur ve geçici dosya + hard link ile atomik yazılır. Kilit yalnızca pid canlıysa ve `ps -o lstart=` başlangıç zamanı eşleşiyorsa (eski düz pid biçiminde komut satırı `codex-bridge-server` içeriyorsa) başlatmayı engeller; boş, geçersiz, ölü veya yeniden kullanılmış pid bayat sayılır. CLI görev zaman aşımı 5 dakikadır. Yazma ve görsel görevleri desteklenmez.
 
 ## Doğrulama
 

@@ -5,6 +5,24 @@ import { codexBridgeRequest } from './codex-bridge-client';
 import { spawn, execFileSync } from 'child_process';
 import { TaskStreamEvent, TaskStreamEventType as T } from './task-stream';
 
+/**
+ * Environment allowlist for the Codex child (B7). Codex authenticates from its
+ * own ChatGPT login under CODEX_HOME (default ~/.codex), so it needs HOME /
+ * CODEX_HOME, PATH (to locate helpers), locale + temp + terminal basics, and
+ * network/TLS settings for corporate proxies. Everything else from the Claude
+ * host — API keys, tokens, provider config — is deliberately NOT inherited.
+ */
+const CODEX_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'TMPDIR', 'LANG', 'CODEX_HOME',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'CODEX_CA_CERTIFICATE'];
+export function codexChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && (CODEX_ENV_KEYS.includes(key) || key.startsWith('LC_'))) env[key] = value;
+  }
+  return env;
+}
+
 /** ChatGPT-authenticated CLI worker. Deliberately read-only; no API fallback. */
 export class CodexWorker {
   private active = new Map<string, (reason: string) => void>();
@@ -53,9 +71,7 @@ export class CodexWorker {
     const args = ['exec', '--output-schema', schemaPath, '--ignore-user-config', '--skip-git-repo-check', '--model', 'gpt-6.1-sol', '--sandbox', 'read-only', '--json', '--color', 'never', '-c', 'approval_policy="never"', '-C', projectRoot];
     if (this.resumeThreadId) args.push('resume', this.resumeThreadId);
     args.push('-');
-    const env = { ...process.env };
-    delete env.OPENAI_API_KEY; delete env.OPENAI_KEY; delete env.CODEX_API_KEY;
-    const child = spawn(this.executable, args, { cwd: projectRoot, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(this.executable, args, { cwd: projectRoot, env: codexChildEnv(), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     let reason = '', threadId = '', failure = '', buffer = '', result = '';
     let inputTokens = 0, outputTokens = 0, toolCalls = 0, completed = false, bytes = 0;
     let hardKill: NodeJS.Timeout | undefined;

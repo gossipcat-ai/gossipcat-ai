@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { CodexWorker } from '../../packages/orchestrator/src/codex-worker';
+import { CodexWorker, codexChildEnv } from '../../packages/orchestrator/src/codex-worker';
 import { configToAgentConfigs, validateConfig } from '../../apps/cli/src/config';
 
 let root: string;
@@ -53,4 +53,16 @@ test('pipeline rejects a prohibited mode before spawning', () => {
 test('model-reported task failure is not successful completion', async () => {
  const output = `console.log(JSON.stringify({type:'thread.started',thread_id:'thread-1'}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({status:'failed',result:'source inaccessible'})}}));console.log(JSON.stringify({type:'turn.completed'}));`;
  expect((await run(new CodexWorker('a','',fake(output)))).at(-1)).toMatchObject({type:'error',payload:{error:'source inaccessible'}});
+});
+
+test('child env is an allowlist: auth/config/locale kept, host secrets dropped', async () => {
+ const env = codexChildEnv({PATH:'/bin',HOME:'/h',CODEX_HOME:'/h/.codex',LC_ALL:'tr_TR.UTF-8',HTTPS_PROXY:'http://p',ANTHROPIC_API_KEY:'x',GITHUB_TOKEN:'y',OPENAI_API_KEY:'z',GOSSIP_RELAY_KEY:'w',NODE_OPTIONS:'--require evil'});
+ expect(env).toEqual({PATH:'/bin',HOME:'/h',CODEX_HOME:'/h/.codex',LC_ALL:'tr_TR.UTF-8',HTTPS_PROXY:'http://p'});
+ const cli = fake(`process.stdin.resume();process.stdin.on('end',()=>{require('fs').writeFileSync('env.json',JSON.stringify(Object.keys(process.env)));${success}});`);
+ const prior = process.env.GITHUB_TOKEN; process.env.GITHUB_TOKEN = 'not-a-real-secret';
+ try {
+  expect((await run(new CodexWorker('a','',cli))).at(-1)?.type).toBe('final_result');
+  const keys: string[] = JSON.parse(readFileSync(join(root,'env.json'),'utf8'));
+  expect(keys).not.toContain('GITHUB_TOKEN'); expect(keys).toContain('PATH');
+ } finally { if (prior === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = prior; }
 });
