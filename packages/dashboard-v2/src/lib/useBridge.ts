@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { DeliveryStatus } from '@/lib/useClaudeInbox';
 
 /**
  * useBridge — frontend hook for ONE conversation on the dashboard ⇄ LIVE Claude
@@ -116,6 +117,13 @@ export interface BridgeMessage {
    * track the high-water mark for ?last_id replay.
    */
   serverId?: number;
+  /**
+   * Durable-inbox id for a dashboard-typed user turn (returned by the POST as
+   * `inbox_id`). Lets the UI show per-message delivery status.
+   */
+  inboxId?: string;
+  /** Delivery status of a user turn: queued → delivered → answered. */
+  delivery?: DeliveryStatus;
 }
 
 /** Connection lifecycle of the SSE stream. */
@@ -192,7 +200,7 @@ function postErrorMessage(status: number): string {
     case 429:
       return 'rate limited — slow down';
     case 503:
-      return 'no live Claude Code session — start `gossipcat code`';
+      return 'could not queue the message — relay inbox unavailable';
     case 401:
       return 'session expired — reload to re-authenticate';
     default:
@@ -464,7 +472,8 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
 
       setSendError(null);
       // Optimistically render the user's turn immediately.
-      setMessages((prev) => [...prev, makeMessage('user', text)]);
+      const optimistic = makeMessage('user', text);
+      setMessages((prev) => [...prev, optimistic]);
       setAwaitingReply(true);
 
       // Reuse the conversation's chat_id once minted; omit on the first send so
@@ -486,7 +495,7 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
 
         // The backend returns chat_id on 202 AND on 503 (so a retry can reuse
         // the same conversation). Adopt it whenever present.
-        let payload: { ok?: boolean; chat_id?: string; error?: string } = {};
+        let payload: { ok?: boolean; chat_id?: string; error?: string; inbox_id?: string; delivery?: string } = {};
         try {
           payload = await res.json();
         } catch {
@@ -496,7 +505,16 @@ export function useBridge(options: UseBridgeOptions = {}): UseBridgeResult {
           setChat(payload.chat_id);
         }
 
-        if (res.status === 202) return;
+        if (res.status === 202) {
+          // Durable inbox: tag the optimistic turn so its delivery status
+          // (queued / delivered / answered) can be tracked and rendered.
+          const inboxId = typeof payload.inbox_id === 'string' ? payload.inbox_id : undefined;
+          if (inboxId) {
+            const delivery: DeliveryStatus = payload.delivery === 'delivered' ? 'delivered' : 'queued';
+            setMessages((prev) => prev.map((m) => (m.id === optimistic.id ? { ...m, inboxId, delivery } : m)));
+          }
+          return;
+        }
 
         // Non-2xx: surface the error, stop the awaiting indicator.
         setAwaitingReply(false);

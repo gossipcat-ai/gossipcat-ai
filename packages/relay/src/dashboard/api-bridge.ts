@@ -32,6 +32,8 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { MirrorEventStore, MIRROR_RING_MAX, MIRROR_RING_TTL_MS } from './api-mirror-events';
 import { FileChatStore, NullChatStore } from './chat-store';
+import { ClaudeInbox, inboxDirFor } from './claude-inbox';
+import { computeClaudeLink } from './claude-inbox-watcher';
 
 /**
  * In-process sink the MCP server registers. Returns true when the message was
@@ -288,7 +290,16 @@ export function validateChatId(raw: unknown): string | null {
 export interface BridgeHubOpts {
   /** When provided, mirror history is persisted under this directory. */
   chatDir?: string;
+  /**
+   * When provided, every Claude-addressed inbound message is FIRST persisted to
+   * the durable inbox under <projectRoot>/.gossip/bridge/inbox (claude-inbox.ts)
+   * and a missing sink queues instead of 503-ing. Absent → legacy behaviour.
+   */
+  projectRoot?: string;
 }
+
+/** Max inbox entries returned per chat by inboxSnapshot (dashboard poll). */
+const INBOX_SNAPSHOT_MAX = 50;
 
 /**
  * BridgeHub — owns the outbound SSE client set and the registered inbound sink.
@@ -361,11 +372,31 @@ export class BridgeHub {
   // session→chat_id entries share the same 2h TTL ceiling as knownChatIds.
   private static readonly MAX_SESSION_MAPPINGS = 64;
 
+  // ── Durable Claude inbox (claude-inbox.ts) ─────────────────────────────────
+  // null when no projectRoot was configured (legacy/test hubs): then a missing
+  // sink still 503s exactly as before.
+  private inbox: ClaudeInbox | null = null;
+  private projectRoot: string | null = null;
+  // True only when the app layer KNOWS the CC session runs in channel mode (it
+  // was launched by `gossipcat code`, which exports GOSSIPCAT_CHANNEL_ACTIVE=1).
+  // Then a successful sink call counts as delivered and `inbox wait` / hooks
+  // skip the message (no double delivery). Unknown → stays queued.
+  private channelConfirmed = false;
+
   constructor(opts: BridgeHubOpts = {}) {
     const store = opts.chatDir
       ? new FileChatStore(opts.chatDir)
       : new NullChatStore();
     this.mirror = new MirrorEventStore(MIRROR_RING_MAX, MIRROR_RING_TTL_MS, undefined, store);
+    if (opts.projectRoot) {
+      this.projectRoot = opts.projectRoot;
+      this.inbox = new ClaudeInbox(inboxDirFor(opts.projectRoot));
+    }
+  }
+
+  /** App layer: declare whether the live sink is a confirmed channel-mode session. */
+  setChannelConfirmed(confirmed: boolean): void {
+    this.channelConfirmed = confirmed;
   }
 
   /** Register (or clear) the in-process inbound sink. Called by RelayServer. */
@@ -429,7 +460,12 @@ export class BridgeHub {
       chatId = v;
     }
 
-    if (!this.sink) {
+    // Durable inbox FIRST: persisted before any delivery attempt so a dropped
+    // channel notification (plain `claude --resume`, no --channels) or a missing
+    // sink can never lose the message.
+    const inboxId = this.persistInbound(chatId, message);
+
+    if (!this.sink && inboxId === null) {
       // No live CC session wired (MCP server not booted, or bridge not active).
       // Tell the dashboard explicitly instead of pretending it was delivered.
       return { status: 503, payload: { error: 'No live Claude Code bridge session is active', chat_id: chatId } };
@@ -444,16 +480,65 @@ export class BridgeHub {
     const sessionId = validateChatId(b.session_id);
     if (sessionId !== null) this.bindSession(sessionId, chatId);
 
-    let delivered: boolean;
-    try {
-      delivered = this.sink(chatId, message);
-    } catch {
-      delivered = false;
-    }
-    if (!delivered) {
+    const delivered = this.callSink(chatId, message);
+    if (!delivered && inboxId === null) {
       return { status: 503, payload: { error: 'Bridge sink rejected the message', chat_id: chatId } };
     }
-    return { status: 202, payload: { ok: true, chat_id: chatId } };
+    return { status: 202, payload: { ok: true, chat_id: chatId, ...this.inboxPayload(inboxId, delivered) } };
+  }
+
+  /** Invoke the sink (if any), mapping throws to false. */
+  private callSink(chatId: string, text: string): boolean {
+    if (!this.sink) return false;
+    try {
+      return this.sink(chatId, text) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Persist to the durable inbox; null when disabled or the write failed. */
+  private persistInbound(chatId: string, text: string): string | null {
+    if (!this.inbox) return null;
+    try {
+      return this.inbox.append(chatId, text).id;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Inbox fields for a 202 payload. A sink accept only counts as `delivered`
+   * when channel mode is CONFIRMED — otherwise CC may have dropped the
+   * notification, so the message stays `queued` for `inbox wait` / hooks.
+   */
+  private inboxPayload(inboxId: string | null, sinkAccepted: boolean): Record<string, unknown> {
+    if (inboxId === null || !this.inbox) return {};
+    const viaChannel = sinkAccepted && this.channelConfirmed;
+    if (viaChannel) this.inbox.mark(inboxId, 'delivered', 'channel');
+    return { inbox_id: inboxId, delivery: viaChannel ? 'delivered' : 'queued', live: viaChannel };
+  }
+
+  /**
+   * Dashboard poll: per-message delivery status for one chat_id plus a truthful
+   * Claude-reachability signal (sink / channel / `inbox wait` heartbeat).
+   */
+  inboxSnapshot(rawChatId: unknown): { status: number; payload: Record<string, unknown> } {
+    const link = computeClaudeLink({
+      hasSink: this.sink !== null,
+      channelConfirmed: this.channelConfirmed,
+      projectRoot: this.projectRoot,
+    });
+    if (rawChatId === null || rawChatId === undefined || rawChatId === '') {
+      return { status: 200, payload: { link, inbox: this.inbox !== null, messages: [] } };
+    }
+    const chatId = validateChatId(rawChatId);
+    if (chatId === null) return { status: 400, payload: { error: 'invalid chat_id' } };
+    const messages = (this.inbox?.list() ?? [])
+      .filter((e) => e.chat_id === chatId)
+      .slice(-INBOX_SNAPSHOT_MAX)
+      .map((e) => ({ id: e.id, status: e.status, received_at: e.received_at }));
+    return { status: 200, payload: { chat_id: chatId, link, inbox: this.inbox !== null, messages } };
   }
 
   /**
@@ -471,6 +556,9 @@ export class BridgeHub {
     // reporting a success that silently vanished (consensus f7e5bc15 f5).
     if (this.clients.size === 0) return false;
     this.broadcast({ type: 'reply', chat_id: chatId, text, ts: new Date().toISOString() });
+    // The MCP `reply` tool answered this chat → close out its inbox entries so
+    // hooks / `inbox wait` never re-surface them and the dashboard shows it.
+    try { this.inbox?.markAnsweredForChat(chatId); } catch { /* best effort */ }
     return true;
   }
 
@@ -661,23 +749,19 @@ export class BridgeHub {
       parts.push(`${q.header}: ${segs.join(' · ')}`);
     }
 
-    if (!this.sink) {
+    if (!this.sink && !this.inbox) {
       return { status: 503, payload: { error: 'No live Claude Code bridge session is active' } };
     }
 
     const turn = `[answer qid=${qid}] ${parts.join(' · ')}`;
-    let delivered: boolean;
-    try {
-      delivered = this.sink(chatId, turn);
-    } catch {
-      delivered = false;
-    }
-    if (!delivered) {
-      return { status: 503, payload: { error: 'Bridge sink rejected the answer' } };
+    const inboxId = this.persistInbound(chatId, turn);
+    const delivered = this.callSink(chatId, turn);
+    if (!delivered && inboxId === null) {
+      return { status: 503, payload: { error: this.sink ? 'Bridge sink rejected the answer' : 'No live Claude Code bridge session is active' } };
     }
     // Single-use: drop the outstanding question so it can't be answered twice.
     this.outstandingQuestions.delete(qid);
-    return { status: 202, payload: { ok: true, qid, chat_id: chatId } };
+    return { status: 202, payload: { ok: true, qid, chat_id: chatId, ...this.inboxPayload(inboxId, delivered) } };
   }
 
   /**
@@ -1050,7 +1134,14 @@ export class BridgeHub {
 
   private isKnownChatId(chatId: string): boolean {
     this.evictChatIds(Date.now());
-    return this.knownChatIds.has(chatId);
+    if (this.knownChatIds.has(chatId)) return true;
+    // Durable fallback: an id the relay itself persisted to the inbox (only
+    // after handlePost validation) stays replyable across an MCP/relay restart
+    // — the `inbox wait` flow routinely spans one.
+    let persisted = false;
+    try { persisted = this.inbox?.hasChatId(chatId) ?? false; } catch { persisted = false; }
+    if (persisted) this.rememberChatId(chatId);
+    return persisted;
   }
 
   private evictChatIds(now: number): void {

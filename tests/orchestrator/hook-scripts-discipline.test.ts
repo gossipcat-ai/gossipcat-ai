@@ -19,11 +19,15 @@ function scriptPath(name: string): string {
 function runScript(
   script: string,
   stdin: string,
+  env: NodeJS.ProcessEnv = { ...process.env, GOSSIPCAT_INBOX_HOOK: '0' },
 ): { stdout: string; stderr: string; status: number } {
+  // GOSSIPCAT_INBOX_HOOK=0 by default: the SessionStart script would otherwise
+  // run whatever `gossipcat` is on PATH against this repo's real inbox.
   const result = spawnSync('bash', [script], {
     input: stdin,
     encoding: 'utf-8',
     timeout: 5000,
+    env,
   });
   return {
     stdout: result.stdout ?? '',
@@ -61,6 +65,41 @@ describe('session-start-bootstrap.sh', () => {
   it('produces no stderr output', () => {
     const { stderr } = runScript(script, '');
     expect(stderr).toBe('');
+  });
+});
+
+describe('session-start-bootstrap.sh — inbox wiring', () => {
+  const script = scriptPath('session-start-bootstrap.sh');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mkdtempSync, writeFileSync, chmodSync, rmSync } = require('fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tmpdir } = require('os');
+  let bin: string;
+  beforeAll(() => {
+    bin = mkdtempSync(join(tmpdir(), 'ss-inbox-bin-'));
+    // Stub `gossipcat` that proves the script invokes `inbox session-start`.
+    writeFileSync(join(bin, 'gossipcat'), '#!/bin/sh\necho "STUB:$1:$2"\n');
+    chmodSync(join(bin, 'gossipcat'), 0o755);
+  });
+  afterAll(() => rmSync(bin, { recursive: true, force: true }));
+
+  it('appends `gossipcat inbox session-start` output when gossipcat is on PATH', () => {
+    const { stdout, status } = runScript(script, '', { ...process.env, PATH: `${bin}:/usr/bin:/bin` });
+    expect(status).toBe(0);
+    expect(stdout).toContain('gossip_status()');
+    expect(stdout).toContain('STUB:inbox:session-start');
+  });
+
+  it('GOSSIPCAT_INBOX_HOOK=0 disables the inbox section', () => {
+    const { stdout } = runScript(script, '', { ...process.env, PATH: `${bin}:/usr/bin:/bin`, GOSSIPCAT_INBOX_HOOK: '0' });
+    expect(stdout).not.toContain('STUB:');
+  });
+
+  it('a missing gossipcat binary is silent and exits 0', () => {
+    const { stdout, stderr, status } = runScript(script, '', { ...process.env, PATH: '/usr/bin:/bin' });
+    expect(status).toBe(0);
+    expect(stderr).toBe('');
+    expect(stdout).not.toContain('[gossipcat inbox]');
   });
 });
 

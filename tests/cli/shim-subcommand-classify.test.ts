@@ -105,6 +105,10 @@ describe('classifyShimSubcommand', () => {
     expect(classify('hook')).toBe('hook');
   });
 
+  it('routes "inbox" → "inbox" (pure-file inbox CLI, no MCP boot)', () => {
+    expect(classify('inbox')).toBe('inbox');
+  });
+
   it('routes "key" → "key"', () => {
     expect(classify('key')).toBe('key');
   });

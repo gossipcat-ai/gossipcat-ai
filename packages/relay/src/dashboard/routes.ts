@@ -234,7 +234,15 @@ export class DashboardRouter {
     this.dashboardRoot = resolveDashboardRoot(projectRoot);
     // Wire the chat write-through store: persist mirror frames under
     // <projectRoot>/.gossip/chat/<chatId>.jsonl so history survives relay restart.
-    this.bridge = new BridgeHub({ chatDir: join(projectRoot, '.gossip', 'chat') });
+    // projectRoot enables the durable Claude inbox (.gossip/bridge/inbox): a
+    // dashboard message is persisted before delivery and queues (202) instead
+    // of 503-ing when no live sink / channel is available.
+    this.bridge = new BridgeHub({ chatDir: join(projectRoot, '.gossip', 'chat'), projectRoot });
+  }
+
+  /** App layer: the live sink is a confirmed channel-mode CC session. */
+  setBridgeChannelConfirmed(confirmed: boolean): void {
+    this.bridge.setChannelConfirmed(confirmed);
   }
 
   /**
@@ -846,6 +854,17 @@ export class DashboardRouter {
           return true;
         }
         this.bridge.handleStream(req, res);
+        return true;
+      }
+
+      // Claude inbox status — /dashboard/api/bridge/inbox[?chat_id=ID] (GET).
+      // Auth already verified above. Read-only: per-message delivery status
+      // (queued/delivered/answered) for one chat + the truthful Claude link
+      // state (channel / inbox-wait heartbeat / session / offline). Polled by the
+      // dashboard, so no allowChatTurn bucket (that would 429 the human chat).
+      if (url === '/dashboard/api/bridge/inbox' && req.method === 'GET') {
+        const { status, payload } = this.bridge.inboxSnapshot(query?.get('chat_id') ?? null);
+        this.json(res, status, payload);
         return true;
       }
 

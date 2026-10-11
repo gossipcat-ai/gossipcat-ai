@@ -12,3 +12,8 @@ export {
   type AskQuestion,
   type AskOption,
 } from './api-bridge';
+export { ClaudeInbox, inboxDirFor, INBOX_ID_RE, type InboxEntry, type InboxStatus } from './claude-inbox';
+export {
+  computeClaudeLink, isWatcherListening, readWatcherHeartbeat, writeWatcherHeartbeat, clearWatcherHeartbeat,
+  type ClaudeLink, type ClaudeLinkState,
+} from './claude-inbox-watcher';

@@ -495,6 +495,16 @@ export class RelayServer {
   }
 
   /**
+   * Declare that the registered bridge sink is a CONFIRMED channel-mode Claude
+   * Code session (launched via `gossipcat code`). Only then does a sink accept
+   * mark the durable inbox entry `delivered`; otherwise it stays `queued` for
+   * `gossipcat inbox wait` / hooks. No-op if the dashboard is disabled.
+   */
+  setBridgeChannelConfirmed(confirmed: boolean): void {
+    this.dashboardRouter?.setBridgeChannelConfirmed(confirmed);
+  }
+
+  /**
    * Ask the dashboard a structured selection question (MCP `gossip_ask` tool).
    * Mirrors emitBridgeReply: chat_id is re-validated + bound to a stream the
    * dashboard actually opened (the same knownChatIds gate as emitReply), the

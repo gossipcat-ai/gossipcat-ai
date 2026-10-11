@@ -57,10 +57,11 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
  */
 export function classifyShimSubcommand(
   sub: string | undefined,
-): 'hook' | 'key' | 'code' | 'help' | 'server' | 'unknown' {
+): 'hook' | 'key' | 'code' | 'inbox' | 'help' | 'server' | 'unknown' {
   if (sub === 'hook') return 'hook';
   if (sub === 'key') return 'key';
   if (sub === 'code') return 'code';
+  if (sub === 'inbox') return 'inbox';
   if (sub === 'help' || sub === '--help' || sub === '-h') return 'help';
   if (sub === undefined || sub === 'mcp') return 'server';
   return 'unknown';
@@ -158,6 +159,8 @@ const __argvShimHandled = (() => {
       '  gossipcat key set <provider>   Store an API key (OS keychain when available, else encrypted file)\n' +
       '  gossipcat key list             Show the resolved store and which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
+      '  gossipcat inbox wait [--timeout <sec>]   Block until dashboard messages for Claude are queued, print them (exit 2 on timeout)\n' +
+      '  gossipcat inbox list|show <id>|ack <id>  Inspect / acknowledge the durable dashboard→Claude inbox\n' +
       '                                 Note: <cwd>/.mcp.json is treated as trusted config (server name is read from it).\n' +
       '  gossipcat help           Show this help\n' +
       '\n' +
@@ -205,6 +208,25 @@ const __argvShimHandled = (() => {
     })().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`gossipcat code: ${msg}\n`);
+      process.exit(1);
+    });
+    return true; // async handler owns the process; do NOT boot the MCP server
+  }
+  if (kind === 'inbox') {
+    // Durable dashboard→Claude inbox (.gossip/bridge/inbox). Pure file access:
+    // works without — and must never boot — the MCP server, so a plain
+    // `claude --resume` session can block on `gossipcat inbox wait` in the
+    // background while another process hosts the relay.
+    void (async () => {
+      const { runInboxCommand } = await import('./inbox-command');
+      const code = await runInboxCommand(argv.slice(1), {
+        out: (s: string) => { process.stdout.write(s); },
+        err: (s: string) => { process.stderr.write(s); },
+      });
+      process.exit(code);
+    })().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gossipcat inbox: ${msg}\n`);
       process.exit(1);
     });
     return true; // async handler owns the process; do NOT boot the MCP server
@@ -291,6 +313,7 @@ if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createBridgeHost } from './cc-bridge';
+import { isChannelModeConfirmed } from './inbox-format';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -718,6 +741,11 @@ async function doBoot() {
       ctx.relay.registerBridgeSink((chatId: string, message: string) =>
         ctx.bridgeHost.deliverBridgeMessage(chatId, message),
       );
+      // Channel mode is CONFIRMED only when launched via `gossipcat code`
+      // (GOSSIPCAT_CHANNEL_ACTIVE=1). Then a sink accept marks the durable inbox
+      // entry delivered; otherwise it stays queued for `gossipcat inbox wait`
+      // / hooks, because CC silently drops the notification without --channels.
+      ctx.relay.setBridgeChannelConfirmed(isChannelModeConfirmed(process.env));
     }
   } catch (e) {
     process.stderr.write(`[gossipcat] bridge sink registration failed: ${(e as Error).message}\n`);
@@ -1445,7 +1473,7 @@ export function createMcpServer(): McpServer {
         experimental: { 'claude/channel': {} },
       },
       instructions:
-        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id; your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).',
+        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id; your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).\n\nWITHOUT channel mode (plain `claude` / `claude --resume`), dashboard messages are queued in a durable inbox instead: run `gossipcat inbox wait` as a background Bash command; when it exits it prints the queued messages fenced as untrusted data with their chat_id — answer each with the same `reply` tool, then start `gossipcat inbox wait` again.',
     }
   );
 

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { navigate } from '@/lib/router';
 import { useBridgeContext } from '@/lib/BridgeContext';
 import { StatusDot, AwaitingDots } from '@/components/chat/ChatPrimitives';
 import { Transcript } from '@/components/chat/Transcript';
+import { ClaudeLinkBadge } from '@/components/chat/InboxStatus';
+import { useClaudeInbox, withDelivery } from '@/lib/useClaudeInbox';
 
 /**
  * ChatDock — bottom-RIGHT docked conversation panel wired to the LIVE Claude
@@ -33,7 +35,12 @@ import { Transcript } from '@/components/chat/Transcript';
 export function ChatDock() {
   const [openPanel, setOpenPanel] = useState(false);
   const [draft, setDraft] = useState('');
-  const { messages, status, awaitingReply, chatId, send, sendError } = useBridgeContext();
+  const { messages: rawMessages, status, awaitingReply, chatId, send, sendError } = useBridgeContext();
+  // Truthful Claude reachability + per-message delivery from the durable inbox.
+  // The SSE `status` only says the DASHBOARD reaches the relay, not that Claude
+  // will see the message (plain `claude --resume` drops channel notifications).
+  const inbox = useClaudeInbox(chatId, openPanel);
+  const messages = useMemo(() => withDelivery(rawMessages, inbox.statusById), [rawMessages, inbox.statusById]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -109,7 +116,7 @@ export function ChatDock() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="h-section">live claude code</span>
-            <StatusDot status={status} compact={true} />
+            {status === 'open' ? <ClaudeLinkBadge link={inbox.link} /> : <StatusDot status={status} compact={true} />}
           </div>
           <div className="mt-0.5 truncate font-mono text-[10px]" style={{ color: 'var(--ink-3)' }}>
             {chatId ? `chat ${chatId.slice(0, 8)}` : 'same session as your terminal'}
