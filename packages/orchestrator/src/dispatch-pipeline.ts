@@ -276,6 +276,7 @@ export class DispatchPipeline {
       log(`❌ dispatch FAILED: agent "${agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
       throw new Error(`Agent "${agentId}" not found`);
     }
+    worker.validateDispatch?.(options);
     log(`→ dispatch → ${agentId}: "${task.slice(0, 80)}..." writeMode=${options?.writeMode || 'default'}`);
 
     // Scoped write mode: validate scope and check for overlaps
@@ -545,6 +546,7 @@ export class DispatchPipeline {
       const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
+        if (entry.status !== 'running') break; // Do not resurrect cancelled/timed-out tasks.
         entry.lastEventAt = Date.now();
         switch (event.type) {
           case TaskStreamEventType.PROGRESS:
@@ -768,6 +770,7 @@ export class DispatchPipeline {
       if (task.status === 'running') {
         task.status = 'failed';
         task.error = 'Cancelled by user';
+        this.workers.get(task.agentId)?.cancelTask?.(task.id, task.error);
         task.completedAt = Date.now();
         // Release resources held by cancelled tasks
         if (task.writeMode === 'scoped') {
@@ -956,6 +959,7 @@ export class DispatchPipeline {
       if (t.status === 'running') {
         t.status = 'failed';
         t.error = 'collect timeout';
+        this.workers.get(t.agentId)?.cancelTask?.(t.id, t.error);
         t.completedAt = Date.now();
         // Fix 5: release scope for timed-out scoped tasks (prevents permanent scope leak)
         if (t.writeMode === 'scoped') {

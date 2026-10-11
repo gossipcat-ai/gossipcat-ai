@@ -9,6 +9,7 @@ import { ILLMProvider, createProvider, createProviderForAgent } from './llm-clie
 import { AgentRegistry } from './agent-registry';
 import { TaskDispatcher } from './task-dispatcher';
 import { WorkerAgent } from './worker-agent';
+import { CodexWorker } from './codex-worker';
 import { log as _log } from './log';
 import { AgentConfig, DispatchOptions, PlanState, ChatResponse, HandleMessageOptions, TaskProgressEvent } from './types';
 import { ALL_TOOLS } from '@gossip/tools';
@@ -96,7 +97,7 @@ export class MainAgent {
   private currentModel: string;
   private registry: AgentRegistry;
   private dispatcher: TaskDispatcher;
-  private workers: Map<string, WorkerAgent> = new Map();
+  private workers: Map<string, WorkerAgent | CodexWorker> = new Map();
   /**
    * Tracks the API key most recently used to build each worker. syncWorkers
    * skips teardown+rebuild when the key (and existence) hasn't changed,
@@ -191,6 +192,13 @@ export class MainAgent {
     for (const config of this.registry.getAll()) {
       if (config.native) continue; // native agents use host's Agent tool, not relay
       if (this.workers.has(config.id)) continue; // skip if already set externally
+      if (config.codexCli) {
+        const path = join(this.projectRoot, '.gossip', 'agents', config.id, 'instructions.md');
+        const worker = new CodexWorker(config.id, existsSync(path) ? readFileSync(path, 'utf-8') : '');
+        await worker.start();
+        this.workers.set(config.id, worker);
+        continue;
+      }
       // Try apiKeys map first, then keyProvider callback.
       // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider),
       // and build via createProviderForAgent so this MCP-boot path honors
@@ -233,7 +241,7 @@ export class MainAgent {
   }
 
   /** Set externally-created workers (used by MCP server to avoid duplicate connections) */
-  setWorkers(externalWorkers: Map<string, WorkerAgent>): void {
+  setWorkers(externalWorkers: Map<string, WorkerAgent | CodexWorker>): void {
     for (const [id, worker] of externalWorkers) {
       this.workers.set(id, worker);
     }
@@ -359,6 +367,14 @@ export class MainAgent {
     for (const ac of this.registry.getAll()) {
       if (ac.native) continue; // native agents use host's Agent tool, not relay
 
+      if (ac.codexCli) {
+        if (!this.workers.has(ac.id)) {
+          const path = join(this.projectRoot, '.gossip', 'agents', ac.id, 'instructions.md');
+          const worker = new CodexWorker(ac.id, existsSync(path) ? readFileSync(path, 'utf-8') : '');
+          await worker.start(); this.workers.set(ac.id, worker); added++;
+        }
+        continue;
+      }
       // Fetch the current key first so we can compare against the snapshot taken
       // when the existing worker was built. If nothing changed we leave the
       // worker (and its live relay connection) alone — this kills the disconnect

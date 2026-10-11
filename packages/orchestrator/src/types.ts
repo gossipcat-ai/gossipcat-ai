@@ -7,6 +7,8 @@ export interface AgentConfig {
   id: string;
   provider: 'anthropic' | 'openai' | 'deepseek' | 'google' | 'local';
   model: string;
+  /** Execute with the local ChatGPT-authenticated Codex CLI; read-only. */
+  codexCli?: boolean;
   /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
    *  When omitted, OpenAIProvider defaults to https://api.openai.com/v1.
    *  Carried from config through configToAgentConfigs (issue #522). */

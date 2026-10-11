@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { SharedChatPage } from '@/components/SharedChatPage';
 import { useRoute, matchRoute } from '@/lib/router';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { ConsensusFlowPage } from '@/pages/ConsensusFlowPage';
@@ -599,6 +600,8 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
           <DebatesPageSkeleton />
         </div>
       );
+  } else if (route === '/shared-chat') {
+    content = <SharedChatPage />;
   } else if (route === '/chat') {
     content = <ChatPage />;
   } else if (route === '/logs') {
@@ -628,7 +631,7 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   // Overview owns its own outer container (max-w-5xl). For everything else,
   // the historical max-w-7xl + space-y-6 wrapper applies.
   const isOverview = route === '/' || route === '/overview' ||
-    !(/^\/(agent\/|consensus\/|tasks\/|team|tasks|debates|logs|signals|violations|chat)/.test(route));
+    !(/^\/(agent\/|consensus\/|tasks\/|team|tasks|debates|logs|signals|violations|chat|shared-chat)/.test(route));
   const mainClass = isOverview
     ? 'px-6 py-6'
     : 'mx-auto max-w-7xl space-y-6 px-6 py-6';
@@ -636,14 +639,14 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   // /chat owns the full viewport: a fixed-height flex shell (topbar + flex-1
   // main) so the chat page fills the remaining height exactly and scrolls
   // internally — no page scroll, no main padding/max-width fighting it.
-  const isChat = route === '/chat';
+  const isChat = route === '/chat' || route === '/shared-chat';
 
   return (
     <div
       className={isChat ? 'flex h-screen flex-col overflow-hidden' : 'min-h-screen'}
       style={{ background: 'var(--surface)' }}
     >
-      <TopBar />
+      {route === '/shared-chat' ? <nav className="border-b px-5 py-2" style={{borderColor:'var(--border)'}}><a href="/dashboard/" className="text-sm" style={{color:'var(--ink-3)'}}>← Gossipcat dashboard</a></nav> : <TopBar />}
       {isChat ? (
         <main className="min-h-0 flex-1">{content}</main>
       ) : (
@@ -655,6 +658,7 @@ function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
 
 export function App() {
   const { authed, login, error, recheck } = useAuth();
+  const route = useRoute();
 
   if (authed === null) {
     return <div className="flex min-h-screen items-center justify-center" style={{ color: 'var(--ink-3)' }}>Loading...</div>;
@@ -668,7 +672,7 @@ export function App() {
     <BridgeProvider>
       <Dashboard onUnauthorized={recheck} />
       <NotificationStack />
-      <ChatDock />
+      {route !== '/shared-chat' && <ChatDock />}
     </BridgeProvider>
   );
 }

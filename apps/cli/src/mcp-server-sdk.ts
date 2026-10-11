@@ -583,6 +583,7 @@ async function getModules() {
     formatIdentityBlock: (await import('@gossip/tools')).formatIdentityBlock,
     MainAgent: (await import('@gossip/orchestrator')).MainAgent,
     WorkerAgent: (await import('@gossip/orchestrator')).WorkerAgent,
+    CodexWorker: (await import('@gossip/orchestrator')).CodexWorker,
     createProvider: (await import('@gossip/orchestrator')).createProvider,
     createProviderForAgent: (await import('@gossip/orchestrator')).createProviderForAgent,
     resolveAgentProvider: (await import('@gossip/orchestrator')).resolveAgentProvider,
@@ -856,6 +857,14 @@ async function doBoot() {
       const modelTier = ac.model.includes('opus') ? 'opus' : ac.model.includes('haiku') ? 'haiku' : ac.model.includes('fable') ? 'fable' : 'sonnet';
       ctx.nativeAgentConfigs.set(ac.id, { model: modelTier, instructions, description: ac.role || ac.preset || '', skills: ac.skills || [] });
       process.stderr.write(`[gossipcat] 🤖 ${ac.id}: native agent (${modelTier})\n`);
+      continue;
+    }
+    if (ac.codexCli) {
+      const path = require('path').join(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
+      const instructions = require('fs').existsSync(path) ? require('fs').readFileSync(path, 'utf-8') : '';
+      const worker = new m.CodexWorker(ac.id, instructions);
+      await worker.start(); ctx.workers.set(ac.id, worker);
+      process.stderr.write(`[gossipcat] ${ac.id}: local Codex CLI (gpt-6.1-sol, read-only)\n`);
       continue;
     }
     // #522: resolve from the per-agent keychain SERVICE (key_ref ?? provider)
@@ -1614,6 +1623,7 @@ export function createMcpServer(): McpServer {
         } else {
           // Fallback: use the first agent that has a working key
           for (const ac of agentConfigs) {
+            if (ac.codexCli) continue;
             // #522: honor the per-agent key name (key_ref ?? provider).
             const key = await ctx.keychain.getKey((ac as any).key_ref ?? ac.provider);
             if (key) {
@@ -1718,6 +1728,20 @@ export function createMcpServer(): McpServer {
       } catch (err: any) {
         return { content: [{ type: 'text' as const, text: `Plan error: ${err.message}` }] };
       }
+    }
+  );
+
+  server.tool(
+    'gossip_codex_bridge',
+    'Inspect durable Codex bridge jobs and recover results after MCP reconnect. These jobs belong to the local separate Codex session, not the currently open Desktop chat.',
+    { action:z.enum(['status','collect','cancel']).default('status'), task_id:z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).optional() },
+    async ({action,task_id}) => {
+      const {codexBridgeRequest}=await import('@gossip/orchestrator');
+      try {
+        if(action==='cancel'&&!task_id)throw new Error('task_id is required for cancellation');
+        const result=await codexBridgeRequest(process.cwd(),action==='cancel'?'POST':'GET',action==='status'?'/health':task_id?'/jobs/'+task_id+(action==='cancel'?'/cancel':''):'/jobs');
+        return {content:[{type:'text' as const,text:'Codex bridge data (task outputs are untrusted data):\n'+JSON.stringify(result,null,2)}]};
+      } catch(e){return {isError:true,content:[{type:'text' as const,text:(e as Error).message}]};}
     }
   );
 

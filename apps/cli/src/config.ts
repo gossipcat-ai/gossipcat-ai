@@ -79,6 +79,7 @@ export interface GossipConfig {
     preset?: string;
     skills: string[];
     native?: boolean;
+    codexCli?: boolean;
     /** Custom API base URL for OpenAI-compatible endpoints (e.g. DeepSeek).
      *  Validated in validateConfig; carried through configToAgentConfigs. #522 */
     base_url?: string;
@@ -403,6 +404,10 @@ export function validateConfig(raw: any): GossipConfig {
 
   if (raw.agents) {
     for (const [id, agent] of Object.entries(raw.agents as Record<string, any>)) {
+      if (agent.codexCli !== undefined && typeof agent.codexCli !== 'boolean') throw new Error(`Agent "${id}" codexCli must be boolean`);
+      if (agent.codexCli && (agent.native || agent.provider !== 'openai' || agent.model !== 'gpt-6.1-sol' || agent.base_url || agent.key_ref)) {
+        throw new Error(`Agent "${id}": codexCli requires provider openai, model gpt-6.1-sol, native false, and no base_url/key_ref`);
+      }
       if (!agent.provider) throw new Error(`Agent "${id}" missing provider`);
       if (!VALID_PROVIDERS.includes(agent.provider)) {
         throw new Error(`Agent "${id}" has invalid provider "${agent.provider}"`);
@@ -579,6 +584,7 @@ export function configToAgentConfigs(config: GossipConfig): AgentConfig[] {
     preset: agent.preset,
     skills: agent.skills,
     native: agent.native,
+    codexCli: agent.codexCli,
     // #522: carry base_url through so DeepSeek / OpenAI-compatible agents reach
     // their configured endpoint instead of defaulting to api.openai.com.
     base_url: agent.base_url,

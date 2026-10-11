@@ -21,6 +21,7 @@ import { activeTasksHandler } from './api-active-tasks';
 import { sessionHandler } from './api-session';
 import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
+import { codexChatHistory, sendCodexChat } from './api-codex-chat';
 import { handleChat } from './api-chat';
 import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame, type AskQuestion } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
@@ -559,6 +560,18 @@ export class DashboardRouter {
       // instead of dismissing AuthGate into an infinite-loading state.
       if (url === '/dashboard/api/auth/check' && req.method === 'GET') {
         this.json(res, 200, { ok: true });
+        return true;
+      }
+
+      if (url === '/dashboard/api/codex-chat' && req.method === 'GET') {
+        try {this.json(res,200,await codexChatHistory(this.projectRoot));}
+        catch(e){this.json(res,503,{error:'Codex bridge unavailable: '+(e as Error).message});}
+        return true;
+      }
+      if (url === '/dashboard/api/codex-chat' && req.method === 'POST') {
+        if(!this.allowChatTurn(req.socket?.remoteAddress || 'unknown')){this.json(res,429,{error:'Too many chat requests'});return true;}
+        try {const body=JSON.parse(await readBody(req,64*1024));this.json(res,202,await sendCodexChat(this.projectRoot,body));}
+        catch(e){this.json(res,400,{error:(e as Error).message});}
         return true;
       }
 

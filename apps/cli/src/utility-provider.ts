@@ -50,7 +50,7 @@ interface Candidate { provider: string; model: string; key: string; baseUrl?: st
 
 export interface SelectUtilityFallbackOpts {
   main: { provider: string; model: string; key: string | null };
-  agents: Array<{ provider: string; model: string; key_ref?: string; native?: boolean; base_url?: string }>;
+  agents: Array<{ provider: string; model: string; key_ref?: string; native?: boolean; codexCli?: boolean; base_url?: string }>;
   getKey: (service: string) => Promise<string | null>;
   isCooled: (provider: string) => boolean;
   createProvider: typeof import('@gossip/orchestrator').createProvider;
@@ -82,7 +82,7 @@ export async function selectUtilityFallbackProvider(
   // correct fallback (pointing at ITS endpoint, not api.openai.com) rather than a
   // broken entry that first-seen-wins would then shadow the curated default with.
   for (const ac of agents) {
-    if (ac.native) continue;
+    if (ac.native || ac.codexCli) continue;
     if (NON_HTTP_PROVIDERS.has(ac.provider) || candidates.has(ac.provider)) continue;
     consider(ac.provider, ac.model, await getKey(ac.key_ref ?? ac.provider), ac.base_url);
   }
