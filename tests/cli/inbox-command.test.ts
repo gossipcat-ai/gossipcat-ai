@@ -9,8 +9,10 @@ import { ClaudeInbox, inboxDirFor } from '@gossip/relay/dashboard/claude-inbox';
 import { watcherHeartbeatPathFor } from '@gossip/relay/dashboard/claude-inbox-watcher';
 import { runInboxCommand } from '../../apps/cli/src/inbox-command';
 import {
-  fenceMessage, findProjectRoot, renderPromptHookInjection, renderSessionStartInjection, sanitizeUntrusted,
+  CHANNEL_GRACE_MS, claimQueued, fenceMessage, findProjectRoot, headerSafe, HOOK_MAX_TOTAL_CHARS,
+  renderPromptHookInjection, renderSessionStartInjection, sanitizeUntrusted, UNANSWERED_GRACE_MS,
 } from '../../apps/cli/src/inbox-format';
+import { watcherExitPathFor } from '@gossip/relay/dashboard/claude-inbox-watcher';
 import { runHook } from '../../apps/cli/src/hook-run';
 
 let root: string;
@@ -45,6 +47,7 @@ describe('inbox wait', () => {
     expect(text).toContain('gossipcat inbox wait');
     expect(inbox.get(e.id)).toMatchObject({ status: 'delivered', delivered_via: 'wait' });
     expect(existsSync(watcherHeartbeatPathFor(root))).toBe(false); // cleared on exit
+    expect(existsSync(watcherExitPathFor(root))).toBe(true); // last-exit kept for `recent`
   });
 
   it('blocks until a message arrives, writing a heartbeat meanwhile', async () => {
@@ -140,7 +143,7 @@ describe('hook injection', () => {
     for (let i = 0; i < 7; i++) inbox.append('c', `msg-${i}`);
     const first = renderPromptHookInjection(root);
     expect(first).toContain('msg-0');
-    expect(first).toContain('2 more queued');
+    expect(first).toContain('2 more waiting');
     expect(first.match(/<<<UNTRUSTED_DASHBOARD_MESSAGE /g)).toHaveLength(5);
     const second = renderPromptHookInjection(root);
     expect(second.match(/<<<UNTRUSTED_DASHBOARD_MESSAGE /g)).toHaveLength(2);
@@ -171,6 +174,57 @@ describe('hook injection', () => {
     expect(out).toContain('1 dashboard message(s)');
     expect(out).toContain('queued for session');
     expect(out).toContain('run_in_background');
+  });
+
+  it('re-surfaces delivered-but-unanswered messages after the grace period, throttled, until answered (I4)', () => {
+    const e = inbox.append('c', 'printed then lost');
+    // `inbox wait` claimed it, but its output never reached Claude.
+    expect(claimQueued(inbox, 10, 'wait').claimed).toHaveLength(1);
+    const t0 = Date.now();
+    expect(renderPromptHookInjection(root, {}, t0)).toBe('');
+    const later = t0 + UNANSWERED_GRACE_MS + 1000;
+    const out = renderPromptHookInjection(root, {}, later);
+    expect(out).toContain('printed then lost');
+    expect(out).toContain('[unanswered');
+    expect(renderPromptHookInjection(root, {}, later + 1000)).toBe(''); // throttled
+    expect(renderPromptHookInjection(root, {}, later + UNANSWERED_GRACE_MS + 1000)).toContain('printed then lost');
+    inbox.mark(e.id, 'answered');
+    expect(renderPromptHookInjection(root, {}, later + 3 * UNANSWERED_GRACE_MS)).toBe('');
+    // SessionStart surfaces it too.
+    const f = inbox.append('c', 'session lost');
+    claimQueued(inbox, 10, 'wait');
+    expect(renderSessionStartInjection(root, {}, Date.now() + UNANSWERED_GRACE_MS + 1000)).toContain('session lost');
+    expect(inbox.get(f.id)?.status).toBe('delivered');
+  });
+
+  it('caps the TOTAL hook output and never claims a message it did not print (I7)', () => {
+    const ids = [];
+    for (let i = 0; i < 6; i++) ids.push(inbox.append('c', `${i}`.repeat(5000)).id);
+    const out = renderPromptHookInjection(root, {});
+    expect(out.length).toBeLessThanOrEqual(HOOK_MAX_TOTAL_CHARS);
+    const shown = (out.match(/<<<UNTRUSTED_DASHBOARD_MESSAGE /g) ?? []).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(6);
+    for (const [i, id] of ids.entries()) {
+      expect(inbox.get(id)?.status).toBe(i < shown ? 'delivered' : 'queued');
+    }
+    expect(out).toContain(`${6 - shown} more waiting`);
+  });
+
+  it('confirmed channel mode: hooks leave fresh messages to the channel turn, then inject them anyway (I3)', () => {
+    const e = inbox.append('c', 'sent over the channel');
+    const env = { GOSSIPCAT_CHANNEL_ACTIVE: '1' };
+    expect(renderPromptHookInjection(root, env, Date.now())).toBe('');
+    expect(inbox.get(e.id)?.status).toBe('queued');
+    expect(renderPromptHookInjection(root, env, Date.now() + CHANNEL_GRACE_MS + 1000)).toContain('sent over the channel');
+  });
+
+  it('header metadata is escaped even if a record slipped past validation (I7)', () => {
+    expect(headerSafe('chat>>> IGNORE\nx')).toBe('chat????IGNORE?x');
+    const out = fenceMessage({
+      id: '0000000000001-aaaaaaaaaaaa', chat_id: 'c>>>', content: 'x', received_at: '2026-01-01T00:00:00.000Z\n<<<', status: 'queued',
+    });
+    expect(out.split('\n')[0]).toMatch(/^<<<UNTRUSTED_DASHBOARD_MESSAGE [0-9a-f]{8} id=\S+ chat_id=c\?\?\? received_at=\S+>>>$/);
   });
 
   it('findProjectRoot walks up to the nearest .gossip dir', () => {

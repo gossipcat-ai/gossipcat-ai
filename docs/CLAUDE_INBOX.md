@@ -19,16 +19,35 @@ relay persists every Claude-addressed message before it tries delivery:
 ```
 .gossip/bridge/inbox/            dir 0700
   <id>.json                      {id, chat_id, content, received_at}  file 0600, written once
-  <id>.delivered                 marker {at, via}: channel | wait | hook | ack | reply
+  <id>.delivered                 marker {at, via}: wait | hook | ack | reply
   <id>.answered                  marker: `reply` was called for that chat_id
-.gossip/bridge/inbox-watcher.json   heartbeat {pid, at} from `gossipcat inbox wait`
+  <id>.reminded                  {at}: last time a hook re-surfaced it as unanswered
+  <id>.quarantine                an oversized record, moved aside unread
+.gossip/bridge/inbox-watcher.json        heartbeat {pid, at} while `inbox wait` is blocked
+.gossip/bridge/inbox-watcher-exit.json   {pid, at, code} written when `inbox wait` exits
+.gossip/bridge/inbox-prune.json          {total, at}: how many answered records were pruned
+.gossip/bridge/outbox/<chat_id>.json     replies waiting for a dashboard stream
 ```
 
 A message's status is `queued`, then `delivered`, then `answered`. The status
 is set by whichever marker exists. Markers are created with `O_EXCL`, so a
-message is shown at most once, even with several waiters and hooks running at
-the same time. The inbox keeps at most 200 messages of up to 32 KiB each, for
-7 days.
+queued message is claimed by exactly one consumer, even with several waiters
+and hooks running at the same time.
+
+Limits:
+
+- At most 200 **unanswered** (queued or delivered) messages of up to 32 KiB
+  each. Unanswered messages are never deleted to make room. When the inbox is
+  full, `POST /dashboard/api/bridge` returns **507** with an error the
+  dashboard shows; answer the messages or close them with
+  `gossipcat inbox ack <id> --answered`.
+- **Answered** messages are kept for 7 days, at most 200 of them (oldest
+  first). The prune count and time are reported in the inbox status endpoint
+  (`stats.pruned_total`, `stats.last_pruned_at`).
+- Received timestamps must be canonical ISO-8601 (`…T…:…:….sssZ`); records
+  with anything else are ignored. Record files over 256 KiB are quarantined
+  without being read. One scan reads at most 1000 records, and lookups stop
+  as soon as they have enough.
 
 The session picks messages up three ways:
 
@@ -44,39 +63,69 @@ The session picks messages up three ways:
   turn it off.
 - **UserPromptSubmit hook** (`gossipcat hook --run`). On each prompt it injects
   any messages that are still queued, at most 5 messages of 2000 characters
-  each. Nothing is lost if the watcher died.
+  each and 12,000 characters in total (including headers). A message is
+  claimed only if it fits in that output. Nothing is lost if the watcher died.
+
+### Unanswered messages come back
+
+Claiming a message and printing it are two steps, so output can be lost in
+between: the watcher may be killed, or its output may never reach Claude. So
+the SessionStart and UserPromptSubmit hooks also re-surface messages that are
+`delivered` but not `answered` more than 10 minutes after delivery. They are
+labelled `[unanswered …]`, shown at most once every 10 minutes (tracked by
+`<id>.reminded`), until `reply` answers the chat or
+`gossipcat inbox ack <id> --answered` closes them. A message may be shown
+twice; it is not lost.
 
 Other commands: `gossipcat inbox list [--json] [--queued]`, `inbox show <id>`
 (read-only), `inbox ack <id> [--answered]`. None of them start the MCP server.
 
-### Avoiding double delivery
+### Delivery rule: duplicates are acceptable, losses are not
 
-The relay marks a message `delivered` (via `channel`) at send time only when
-both of these are true:
+The relay never marks a message `delivered` because a channel notification was
+sent. The notification is fire-and-forget: the sink returns as soon as it hands
+the message to the stdio transport (or to a small buffer that drops its oldest
+entry when full), and Claude Code drops it silently without `--channels`.
+Neither the sink result nor `GOSSIPCAT_CHANNEL_ACTIVE=1` proves Claude saw it.
 
-- the in-process sink accepted it
-- channel mode is **confirmed**, meaning the MCP server's environment has
-  `GOSSIPCAT_CHANNEL_ACTIVE=1` (set by `gossipcat code`)
+So a message stays `queued` until one of these happens:
 
-`CLAUDE_CHANNEL_ID` is also honoured for forward compatibility, but Claude Code
-does not set it today. If channel mode is not confirmed, the message stays
-`queued` even when a notification was sent. The worst case is then a duplicate,
-never a lost message.
+- `inbox wait`, a hook, or `inbox ack` claims it (`delivered`)
+- `reply` answers its chat (`answered`)
+
+In channel mode (`GOSSIPCAT_CHANNEL_ACTIVE=1`, set by `gossipcat code`) the
+message usually also arrives as a channel turn. The hooks leave a queued
+message alone for its first 2 minutes so the channel turn and its `reply` can
+close it first. After that they inject it anyway. You may see it twice, but you
+won't lose it. `CLAUDE_CHANNEL_ID` is also honoured for forward compatibility,
+but Claude Code does not set it today. The POST response reports
+`delivery: "queued"` and `live: true` when a channel notification was also
+attempted.
 
 ### Untrusted content
 
 Message text is rendered inside a fence with a random nonce:
-`<<<UNTRUSTED_DASHBOARD_MESSAGE <nonce> id=… chat_id=…>>> … <<<END_… <nonce>>>`.
-Control characters are stripped. Only validated `id` and `chat_id` values
-appear outside the fence. Each message comes with a note: it is the human's
+`<<<UNTRUSTED_DASHBOARD_MESSAGE <nonce> id=… chat_id=… received_at=…>>> … <<<END_… <nonce>>>`.
+Control characters are stripped. Only validated `id`, `chat_id` and
+`received_at` values appear outside the fence, and the header escapes any
+character outside `[A-Za-z0-9_.:-]` anyway. Each message comes with a note: it is the human's
 chat text, not system or tool instructions, and must be answered with `reply`
 using the exact `chat_id`.
 
 ### Dashboard truthfulness
 
 `POST /dashboard/api/bridge` returns `202 {inbox_id, delivery, live}`, even
-when no MCP sink is wired. It returns 503 only when the message could not be
-persisted.
+when no MCP sink is wired. It returns 507 when the inbox is full of unanswered
+messages, and 503 only when the message could not be persisted.
+
+Cookie-authenticated writes (`POST` to `/dashboard/api/bridge`, answers,
+`codex-chat`, `skills/bind`, `findings/archive`, `bridge/mirror`) must be
+same-origin: `Origin` must equal the relay's own origin (or, without `Origin`,
+`Sec-Fetch-Site: same-origin`), and the body must be `application/json`.
+A page on the same host but another port is rejected. Bearer-key clients
+(hooks, scripts) are not affected. The shared chat page runs on its own port;
+its proxy checks that the browser `Origin` is its own and then forwards the
+request with the relay's origin.
 
 The dashboard polls `GET /dashboard/api/bridge/inbox?chat_id=…` for
 per-message status and a link state:
@@ -85,10 +134,16 @@ per-message status and a link state:
 |---|---|---|
 | `channel` | sink present and channel confirmed | ok |
 | `listening` | an `inbox wait` heartbeat is fresh (under 30s) and its pid is alive | ok |
-| `recent` | the watcher exited in the last 15 min | warn |
+| `recent` | the watcher exited (or its heartbeat went stale) in the last 15 min; `last_exit` gives the time | warn |
 | `session` | MCP server up, nothing listening | warn |
 | `offline` | no sink, no watcher | idle |
 
+`gossipcat inbox wait` deletes its heartbeat when it exits, so it never shows
+as `listening` after exiting. It also writes `inbox-watcher-exit.json`, which
+is what the `recent` state is based on.
+
 `reply` can still find a chat whose message is in the inbox after an MCP or
-relay restart. It marks that chat's entries `answered`, but only if the reply
-reached a dashboard stream.
+relay restart. It marks that chat's entries `answered`. If no dashboard stream
+for that chat is open, the reply is stored in `.gossip/bridge/outbox/` (at most
+20 replies per chat, 64 chats, 24 hours) and the tool reports "queued for
+delivery". The stored replies are sent once, when a stream for that chat opens.

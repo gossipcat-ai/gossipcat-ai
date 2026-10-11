@@ -52,6 +52,7 @@ export function startSharedChatWeb(root:string){
     if(req.method==='GET'){json(res,200,await codexChatHistory(root));return;}
     if(req.method==='POST'){
      if(!originAllowed(req)){json(res,403,{error:'Cross-origin messages are not allowed'});return;}
+     if((req.headers['content-type']||'').split(';')[0].trim().toLowerCase()!=='application/json'){json(res,415,{error:'Content-Type must be application/json'});return;}
      // Throttle accepted submissions (each one queues a Codex run) per client IP.
      if(!allowChat(req.socket.remoteAddress||'unknown')){json(res,429,{error:'Too many chat requests'});return;}
      const text=await readCappedBody(req,MAX_CHAT_BODY);
@@ -61,7 +62,16 @@ export function startSharedChatWeb(root:string){
     json(res,405,{error:'Method not allowed'});return;
    }
    if(url.pathname.startsWith('/dashboard/api/')||url.pathname==='/dashboard/ws'){
-    const headers={...req.headers,host:'127.0.0.1:'+targetPort()};
+    const relayAuthority='127.0.0.1:'+targetPort();
+    const headers:Record<string,string|string[]|undefined>={...req.headers,host:relayAuthority};
+    // The relay accepts cookie-authenticated writes only from its own origin
+    // (packages/relay/src/dashboard/csrf-guard.ts). This page is a different
+    // origin, so verify the browser Origin is OURS here, then forward it as the
+    // relay origin. A foreign Origin is refused before it reaches the relay.
+    if(req.headers.origin!==undefined){
+     if(!originAllowed(req)){json(res,403,{error:'Cross-origin request rejected'});return;}
+     headers.origin='http://'+relayAuthority;
+    }
     const upstream=request({hostname:'127.0.0.1',port:targetPort(),path:req.url,method:req.method,headers},reply=>{res.writeHead(reply.statusCode||502,reply.headers);reply.pipe(res);});
     upstream.on('error',()=>{if(!res.headersSent)json(res,502,{error:'Gossipcat relay unavailable'});else res.end();});req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);return;
    }

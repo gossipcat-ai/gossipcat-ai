@@ -24,6 +24,10 @@ describe('parseInboxSnapshot', () => {
       parseInboxSnapshot({ link: { state: 'listening', last_seen: '2026-10-11T00:00:00Z' }, messages: [{ id: 'a', status: 'answered' }] }),
     ).toEqual({ link: { state: 'listening', last_seen: '2026-10-11T00:00:00Z' }, statusById: { a: 'answered' } });
   });
+  it('keeps last_exit so a just-exited watcher shows as recent', () => {
+    expect(parseInboxSnapshot({ link: { state: 'recent', last_exit: '2026-10-11T00:00:00.000Z' } }))
+      .toEqual({ link: { state: 'recent', last_exit: '2026-10-11T00:00:00.000Z' }, statusById: {} });
+  });
   it('rejects unknown link states and drops malformed message rows', () => {
     expect(parseInboxSnapshot({ link: { state: 'pwned' } })).toBeNull();
     expect(parseInboxSnapshot({ online: true, jobs: [] })).toBeNull();

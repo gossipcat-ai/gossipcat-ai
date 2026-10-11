@@ -20,6 +20,8 @@ export type ClaudeLinkState = 'channel' | 'listening' | 'recent' | 'session' | '
 export interface ClaudeLink {
   state: ClaudeLinkState;
   last_seen?: string;
+  /** When the last `gossipcat inbox wait` exited (drives the `recent` state). */
+  last_exit?: string;
 }
 
 export interface ClaudeInboxView {
@@ -36,10 +38,11 @@ const DELIVERY: readonly string[] = ['queued', 'delivered', 'answered'];
 export function parseInboxSnapshot(raw: unknown): ClaudeInboxView | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as { link?: unknown; messages?: unknown };
-  const l = r.link as { state?: unknown; last_seen?: unknown } | undefined;
+  const l = r.link as { state?: unknown; last_seen?: unknown; last_exit?: unknown } | undefined;
   if (!l || typeof l.state !== 'string' || !LINK_STATES.includes(l.state)) return null;
   const link: ClaudeLink = { state: l.state as ClaudeLinkState };
   if (typeof l.last_seen === 'string') link.last_seen = l.last_seen;
+  if (typeof l.last_exit === 'string') link.last_exit = l.last_exit;
   const statusById: Record<string, DeliveryStatus> = {};
   if (Array.isArray(r.messages)) {
     for (const m of r.messages as Array<{ id?: unknown; status?: unknown }>) {
@@ -58,7 +61,8 @@ export function parseInboxSnapshot(raw: unknown): ClaudeInboxView | null {
  */
 function mergeView(prev: ClaudeInboxView, next: ClaudeInboxView | null): ClaudeInboxView {
   const link = next?.link ?? null;
-  const sameLink = link?.state === prev.link?.state && link?.last_seen === prev.link?.last_seen;
+  const sameLink = link?.state === prev.link?.state && link?.last_seen === prev.link?.last_seen
+    && link?.last_exit === prev.link?.last_exit;
   let statusById = prev.statusById;
   if (next && Object.entries(next.statusById).some(([id, st]) => prev.statusById[id] !== st)) {
     statusById = { ...prev.statusById, ...next.statusById };

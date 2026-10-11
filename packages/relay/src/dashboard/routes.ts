@@ -23,7 +23,8 @@ import { logsHandler } from './api-logs';
 import { violationsHandler } from './api-violations';
 import { codexChatHistory, sendCodexChat } from './api-codex-chat';
 import { handleChat } from './api-chat';
-import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame, type AskQuestion } from './api-bridge';
+import { checkCookieRequest } from './csrf-guard';
+import { BridgeHub, validateChatId, type BridgeSink, type InboundMirrorFrame, type AskQuestion, type BridgeReplyStatus } from './api-bridge';
 import { ChatConversationStore } from './chat-session-store';
 import type { ChatbotAgent } from '@gossip/orchestrator';
 import { buildCoverageDegradedMessage } from '@gossip/orchestrator';
@@ -275,6 +276,11 @@ export class DashboardRouter {
     return this.bridge.emitReply(chatId, text);
   }
 
+  /** Like emitBridgeReply, but says whether the reply was shown live or queued for the next stream. */
+  emitBridgeReplyStatus(chatId: string, text: string): BridgeReplyStatus {
+    return this.bridge.emitReplyStatus(chatId, text);
+  }
+
   /**
    * Ask the dashboard a structured selection question (MCP `gossip_ask` tool).
    * The hub gates chat_id on knownChatIds exactly like emitReply, registers the
@@ -343,6 +349,14 @@ export class DashboardRouter {
       const token = this.extractSessionToken(req);
       if (!token || !this.auth.validateSession(token)) {
         this.json(res, 401, { error: 'Unauthorized' });
+        return true;
+      }
+      // Cookie auth is ambient: a same-site page on another port gets the
+      // cookie attached too. State-changing cookie requests must therefore be
+      // same-origin + JSON (csrf-guard.ts). Bearer requests skip this above.
+      const csrf = checkCookieRequest(req);
+      if (!csrf.ok) {
+        this.json(res, csrf.status, { error: csrf.error });
         return true;
       }
       return this.handleApi(req, res, url, query);

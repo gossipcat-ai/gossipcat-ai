@@ -32,8 +32,15 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { MirrorEventStore, MIRROR_RING_MAX, MIRROR_RING_TTL_MS } from './api-mirror-events';
 import { FileChatStore, NullChatStore } from './chat-store';
-import { ClaudeInbox, inboxDirFor } from './claude-inbox';
+import { ClaudeInbox, InboxFullError, inboxDirFor } from './claude-inbox';
 import { computeClaudeLink } from './claude-inbox-watcher';
+import { outboxDirFor, ReplyOutbox } from './bridge-reply-outbox';
+
+/** Outcome of an outbound reply: shown on an open stream, parked for the next one, or refused. */
+export type BridgeReplyStatus = 'delivered' | 'queued' | 'rejected';
+
+/** persistInbound result: stored id, inbox full (→ 507), or no inbox / write failed. */
+type PersistResult = { id: string } | { full: number } | null;
 
 /**
  * In-process sink the MCP server registers. Returns true when the message was
@@ -377,11 +384,17 @@ export class BridgeHub {
   // sink still 503s exactly as before.
   private inbox: ClaudeInbox | null = null;
   private projectRoot: string | null = null;
-  // True only when the app layer KNOWS the CC session runs in channel mode (it
+  // True when the app layer believes the CC session runs in channel mode (it
   // was launched by `gossipcat code`, which exports GOSSIPCAT_CHANNEL_ACTIVE=1).
-  // Then a successful sink call counts as delivered and `inbox wait` / hooks
-  // skip the message (no double delivery). Unknown → stays queued.
+  // Used ONLY for the dashboard link state. It never marks a message
+  // delivered: a sink accept just means the notification was handed to the
+  // stdio transport, which CC may still drop. Messages stay `queued` until a
+  // consumer (inbox wait / hook / ack) claims them or `reply` answers the chat
+  // — a duplicate is acceptable, a loss is not (docs/CLAUDE_INBOX.md).
   private channelConfirmed = false;
+  // Replies emitted while no stream for their chat_id was open; flushed (once)
+  // by handleStream. File-backed when projectRoot is set.
+  private outbox: ReplyOutbox;
 
   constructor(opts: BridgeHubOpts = {}) {
     const store = opts.chatDir
@@ -392,6 +405,7 @@ export class BridgeHub {
       this.projectRoot = opts.projectRoot;
       this.inbox = new ClaudeInbox(inboxDirFor(opts.projectRoot));
     }
+    this.outbox = new ReplyOutbox(opts.projectRoot ? outboxDirFor(opts.projectRoot) : null);
   }
 
   /** App layer: declare whether the live sink is a confirmed channel-mode session. */
@@ -463,7 +477,9 @@ export class BridgeHub {
     // Durable inbox FIRST: persisted before any delivery attempt so a dropped
     // channel notification (plain `claude --resume`, no --channels) or a missing
     // sink can never lose the message.
-    const inboxId = this.persistInbound(chatId, message);
+    const persisted = this.persistInbound(chatId, message);
+    if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
+    const inboxId = persisted ? persisted.id : null;
 
     if (!this.sink && inboxId === null) {
       // No live CC session wired (MCP server not booted, or bridge not active).
@@ -498,25 +514,40 @@ export class BridgeHub {
   }
 
   /** Persist to the durable inbox; null when disabled or the write failed. */
-  private persistInbound(chatId: string, text: string): string | null {
+  private persistInbound(chatId: string, text: string): PersistResult {
     if (!this.inbox) return null;
     try {
-      return this.inbox.append(chatId, text).id;
-    } catch {
-      return null;
+      return { id: this.inbox.append(chatId, text).id };
+    } catch (e) {
+      return e instanceof InboxFullError ? { full: e.unanswered } : null;
     }
   }
 
   /**
-   * Inbox fields for a 202 payload. A sink accept only counts as `delivered`
-   * when channel mode is CONFIRMED — otherwise CC may have dropped the
-   * notification, so the message stays `queued` for `inbox wait` / hooks.
+   * 507 when the inbox is full of UNANSWERED messages. The store never deletes
+   * an unanswered message to make room, so a new one is refused explicitly
+   * (the dashboard shows the error) instead of silently evicting an older one.
+   */
+  private inboxFullResponse(unanswered: number, chatId: string): { status: number; payload: Record<string, unknown> } {
+    return {
+      status: 507,
+      payload: {
+        error: `Claude inbox is full (${unanswered} unanswered messages). Ask Claude to answer them, or clear them with \`gossipcat inbox ack <id> --answered\`, then resend.`,
+        chat_id: chatId,
+        inbox_full: true,
+      },
+    };
+  }
+
+  /**
+   * Inbox fields for a 202 payload. Always `queued`: a sink accept (even in
+   * channel mode) is not proof Claude saw it — the message stays queued until
+   * `inbox wait` / a hook / `ack` claims it or `reply` answers the chat.
+   * `live` only says a channel notification was also attempted.
    */
   private inboxPayload(inboxId: string | null, sinkAccepted: boolean): Record<string, unknown> {
     if (inboxId === null || !this.inbox) return {};
-    const viaChannel = sinkAccepted && this.channelConfirmed;
-    if (viaChannel) this.inbox.mark(inboxId, 'delivered', 'channel');
-    return { inbox_id: inboxId, delivery: viaChannel ? 'delivered' : 'queued', live: viaChannel };
+    return { inbox_id: inboxId, delivery: 'queued', live: sinkAccepted && this.channelConfirmed };
   }
 
   /**
@@ -529,37 +560,54 @@ export class BridgeHub {
       channelConfirmed: this.channelConfirmed,
       projectRoot: this.projectRoot,
     });
+    // stats: unanswered vs capacity + how many answered records were pruned,
+    // so pruning / a nearly-full inbox is visible instead of silent.
+    let stats: Record<string, unknown> | undefined;
+    try { stats = this.inbox ? { ...this.inbox.stats() } : undefined; } catch { stats = undefined; }
+    const base = { link, inbox: this.inbox !== null, ...(stats ? { stats } : {}) };
     if (rawChatId === null || rawChatId === undefined || rawChatId === '') {
-      return { status: 200, payload: { link, inbox: this.inbox !== null, messages: [] } };
+      return { status: 200, payload: { ...base, messages: [] } };
     }
     const chatId = validateChatId(rawChatId);
     if (chatId === null) return { status: 400, payload: { error: 'invalid chat_id' } };
-    const messages = (this.inbox?.list() ?? [])
-      .filter((e) => e.chat_id === chatId)
-      .slice(-INBOX_SNAPSHOT_MAX)
+    const messages = (this.inbox?.list({ chatId, limit: INBOX_SNAPSHOT_MAX, newestFirst: true }) ?? [])
       .map((e) => ({ id: e.id, status: e.status, received_at: e.received_at }));
-    return { status: 200, payload: { chat_id: chatId, link, inbox: this.inbox !== null, messages } };
+    return { status: 200, payload: { chat_id: chatId, ...base, messages, pending_replies: this.outbox.count(chatId) } };
   }
 
   /**
    * OUTBOUND: the MCP `reply` tool forwards CC's reply here. Binds chat_id
-   * (consensus f5) — drops a reply addressed to a stream the dashboard never
-   * opened. Always fans out a `reply` frame on success. Returns whether the id
-   * was bound (so the MCP tool can no-op honestly when it wasn't).
+   * (consensus f5) — refuses a reply addressed to a chat the dashboard never
+   * opened. When a stream for the chat_id is open the reply is written to it
+   * ('delivered'); otherwise it is parked in the bounded reply outbox and
+   * flushed once when such a stream opens ('queued') — with the durable inbox
+   * Claude routinely answers while the dashboard tab is closed. Either way the
+   * chat's inbox entries are marked answered. 'rejected' = unbound/malformed id
+   * or the reply could not be stored.
    */
-  emitReply(rawChatId: string, text: string): boolean {
+  emitReplyStatus(rawChatId: string, text: string): BridgeReplyStatus {
     const chatId = validateChatId(rawChatId);
-    if (chatId === null) return false;
-    if (!this.isKnownChatId(chatId)) return false;
-    // No connected SSE client → the reply cannot be delivered. Return false so
-    // the MCP `reply` tool surfaces an honest "no open stream" error instead of
-    // reporting a success that silently vanished (consensus f7e5bc15 f5).
-    if (this.clients.size === 0) return false;
-    this.broadcast({ type: 'reply', chat_id: chatId, text, ts: new Date().toISOString() });
+    if (chatId === null || typeof text !== 'string') return 'rejected';
+    if (!this.isKnownChatId(chatId)) return 'rejected';
+    const ts = new Date().toISOString();
+    let status: BridgeReplyStatus = 'delivered';
+    if (this.broadcast({ type: 'reply', chat_id: chatId, text, ts }) === 0) {
+      try {
+        this.outbox.push(chatId, text);
+        status = 'queued';
+      } catch {
+        return 'rejected';
+      }
+    }
     // The MCP `reply` tool answered this chat → close out its inbox entries so
     // hooks / `inbox wait` never re-surface them and the dashboard shows it.
     try { this.inbox?.markAnsweredForChat(chatId); } catch { /* best effort */ }
-    return true;
+    return status;
+  }
+
+  /** Boolean form of emitReplyStatus: true when delivered OR queued for delivery. */
+  emitReply(rawChatId: string, text: string): boolean {
+    return this.emitReplyStatus(rawChatId, text) !== 'rejected';
   }
 
   /**
@@ -754,7 +802,9 @@ export class BridgeHub {
     }
 
     const turn = `[answer qid=${qid}] ${parts.join(' · ')}`;
-    const inboxId = this.persistInbound(chatId, turn);
+    const persisted = this.persistInbound(chatId, turn);
+    if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
+    const inboxId = persisted ? persisted.id : null;
     const delivered = this.callSink(chatId, turn);
     if (!delivered && inboxId === null) {
       return { status: 503, payload: { error: this.sink ? 'Bridge sink rejected the answer' : 'No live Claude Code bridge session is active' } };
@@ -1011,6 +1061,30 @@ export class BridgeHub {
       this.clients.delete(res);
       this.clientChatId.delete(res);
     });
+
+    if (chatId !== null) this.flushPendingReplies(res, chatId);
+  }
+
+  /**
+   * Deliver replies parked while no stream for `chatId` was open (emitReply →
+   * 'queued'). take() removes them first, so each is written at most once; a
+   * write that throws (socket already gone) re-parks the remainder for the
+   * next stream. A backpressured write (false) is still buffered by Node.
+   */
+  private flushPendingReplies(res: ServerResponse, chatId: string): void {
+    let pending: { text: string; ts: string }[];
+    try { pending = this.outbox.take(chatId); } catch { return; }
+    for (let i = 0; i < pending.length; i++) {
+      const frame: BridgeReplyFrame = { type: 'reply', chat_id: chatId, text: pending[i].text, ts: pending[i].ts };
+      try {
+        res.write(`data: ${JSON.stringify(frame)}\n\n`);
+      } catch {
+        for (const rest of pending.slice(i)) {
+          try { this.outbox.push(chatId, rest.text, Date.parse(rest.ts)); } catch { /* bounded store full/IO */ }
+        }
+        return;
+      }
+    }
   }
 
   /**
@@ -1055,11 +1129,14 @@ export class BridgeHub {
    * eliminates the prior behaviour of broadcasting EVERY frame to ALL clients
    * (the bandwidth/confidentiality gap noted in the multi-tab fix spec).
    */
-  private broadcast(frame: BridgeReplyFrame | MirrorFrame): void {
+  private broadcast(frame: BridgeReplyFrame | MirrorFrame): number {
     // Mirror frames carry an SSE `id:` line so the browser EventSource exposes
     // lastEventId; reply/ack/restart control frames have no per-chat_id id.
     const idLine = 'id' in frame && typeof (frame as MirrorFrame).id === 'number' ? `id: ${(frame as MirrorFrame).id}\n` : '';
     const data = `${idLine}data: ${JSON.stringify(frame)}\n\n`;
+    // Number of clients that accepted the frame (a backpressured-but-kept
+    // client still buffers it). emitReplyStatus parks the reply when this is 0.
+    let written = 0;
     for (const res of this.clients) {
       // Server-side chat_id filter: only deliver to clients whose subscribed
       // chat_id matches this frame's chat_id. A null-subscribed (legacy) client
@@ -1073,6 +1150,7 @@ export class BridgeHub {
         const ok = res.write(data);
         if (ok) {
           this.backpressure.set(res, 0);
+          written++;
         } else {
           const count = (this.backpressure.get(res) ?? 0) + 1;
           this.backpressure.set(res, count);
@@ -1081,6 +1159,8 @@ export class BridgeHub {
             res.destroy();
             this.clients.delete(res);
             this.clientChatId.delete(res); // clean up subscription on eviction
+          } else {
+            written++;
           }
         }
       } catch {
@@ -1089,6 +1169,7 @@ export class BridgeHub {
         this.clientChatId.delete(res); // clean up subscription on exception
       }
     }
+    return written;
   }
 
   /** Clear + drop a client's keepalive interval (f12). Safe if absent. */

@@ -741,10 +741,11 @@ async function doBoot() {
       ctx.relay.registerBridgeSink((chatId: string, message: string) =>
         ctx.bridgeHost.deliverBridgeMessage(chatId, message),
       );
-      // Channel mode is CONFIRMED only when launched via `gossipcat code`
-      // (GOSSIPCAT_CHANNEL_ACTIVE=1). Then a sink accept marks the durable inbox
-      // entry delivered; otherwise it stays queued for `gossipcat inbox wait`
-      // / hooks, because CC silently drops the notification without --channels.
+      // Channel mode is believed active only when launched via `gossipcat code`
+      // (GOSSIPCAT_CHANNEL_ACTIVE=1). It drives the dashboard link state only:
+      // a sink accept never marks the durable inbox entry delivered (CC may
+      // still drop the notification), so it stays queued until a consumer
+      // claims it or `reply` answers the chat (docs/CLAUDE_INBOX.md).
       ctx.relay.setBridgeChannelConfirmed(isChannelModeConfirmed(process.env));
     }
   } catch (e) {
@@ -2087,7 +2088,7 @@ export function createMcpServer(): McpServer {
   // mis-fired call during a native-dispatch turn can't silently spoof a relay.
   server.tool(
     'reply',
-    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. Returns an error (no side effect) when no matching dashboard bridge stream is open.',
+    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. If no dashboard stream is open the reply is queued and shown when the dashboard reconnects. Returns an error (no side effect) when the chat_id is unknown to the dashboard.',
     {
       chat_id: z.string().describe('The chat_id verbatim from the <channel ... chat_id="..."> dashboard message.'),
       text: z.string().describe('The reply text to stream to the dashboard.'),
@@ -2105,17 +2106,29 @@ export function createMcpServer(): McpServer {
       if (!ctx.relay) {
         return { content: [{ type: 'text' as const, text: 'reply error: no dashboard bridge is active (relay not started).' }], isError: true };
       }
-      let delivered = false;
+      // 'delivered' = written to an open dashboard stream; 'queued' = no stream
+      // for this chat_id is open right now, so the relay parked the reply and
+      // flushes it once when the dashboard reconnects (still a success — the
+      // chat is marked answered either way); 'rejected' = unknown chat_id.
+      let status: 'delivered' | 'queued' | 'rejected' = 'rejected';
       try {
-        delivered = ctx.relay.emitBridgeReply(chat_id, text) === true;
+        const relay = ctx.relay as typeof ctx.relay & {
+          emitBridgeReplyStatus?: (c: string, t: string) => 'delivered' | 'queued' | 'rejected';
+        };
+        status = typeof relay.emitBridgeReplyStatus === 'function'
+          ? relay.emitBridgeReplyStatus(chat_id, text)
+          : (relay.emitBridgeReply(chat_id, text) === true ? 'delivered' : 'rejected');
       } catch {
-        delivered = false;
+        status = 'rejected';
       }
-      if (!delivered) {
+      if (status === 'rejected') {
         return {
-          content: [{ type: 'text' as const, text: `reply error: no open dashboard bridge stream for chat_id "${chat_id}". This tool only sends to the dashboard channel — if you meant to close a native-subagent task, use gossip_relay instead.` }],
+          content: [{ type: 'text' as const, text: `reply error: unknown dashboard chat_id "${chat_id}" (never opened by the dashboard). This tool only sends to the dashboard channel — if you meant to close a native-subagent task, use gossip_relay instead.` }],
           isError: true,
         };
+      }
+      if (status === 'queued') {
+        return { content: [{ type: 'text' as const, text: `Reply queued for delivery: no dashboard stream for chat_id ${chat_id} is open right now; it will be shown when the dashboard reconnects.` }] };
       }
       return { content: [{ type: 'text' as const, text: `Sent reply to dashboard (chat_id ${chat_id}).` }] };
     },

@@ -1,36 +1,35 @@
 /**
  * claude-inbox.ts — durable, file-backed inbox for dashboard → Claude Code
- * bridge messages.
- *
- * Why: the in-process bridge sink emits `notifications/claude/channel`, which
- * Claude Code silently DROPS unless the session was launched with `--channels`
- * (or the development-channels flag). Without a durable record a dashboard
- * message to a plain `claude --resume` session vanishes. Every Claude-addressed
- * bridge message is therefore persisted here FIRST; the channel notification is
- * a best-effort fast path on top.
+ * bridge messages. Claude Code silently DROPS `notifications/claude/channel`
+ * unless launched with `--channels`, so every Claude-addressed message is
+ * persisted here FIRST; the channel notification is a best-effort fast path and
+ * NEVER marks a message delivered by itself (see docs/CLAUDE_INBOX.md).
  *
  * Layout (`<root>/.gossip/bridge/inbox/`, dir 0700, files 0600):
- *   <id>.json        immutable message record {id, chat_id, content, received_at}
- *   <id>.delivered   marker: shown to Claude (inbox wait / hook / confirmed channel)
+ *   <id>.json        immutable record {id, chat_id, content, received_at}
+ *   <id>.delivered   marker {at, via}: shown to Claude (inbox wait / hook / ack)
  *   <id>.answered    marker: the MCP `reply` tool answered this chat_id
+ *   <id>.reminded    {at}: last time a hook re-surfaced it as unanswered
+ *   <id>.quarantine  an oversized record moved aside (never read)
  *
- * Concurrency: the relay (writer of messages + `answered`) and the CLI
- * (`gossipcat inbox wait`, writer of `delivered`) are different processes. The
- * record is written once (tmp file + rename = atomic) and never rewritten;
- * status transitions are separate marker files created with O_EXCL ('wx'). No
- * read-modify-write exists, so concurrent writers cannot lose or regress a
- * transition. Status = answered > delivered > queued (highest marker wins).
+ * Concurrency: records are written once (tmp + rename); status transitions are
+ * separate marker files created with O_EXCL, so concurrent writers (relay and
+ * CLI processes) can't lose or regress a transition. answered > delivered > queued.
  *
- * Bounds: MAX_ENTRIES records, MAX_CONTENT_CHARS per record, RETENTION_MS age.
- * Pruning runs on every append. Readers tolerate files vanishing mid-scan.
+ * Bounds (nothing unanswered is ever deleted to make room): at most
+ * INBOX_MAX_UNANSWERED unanswered records — append() throws InboxFullError
+ * beyond that; answered records age out / are capped (claude-inbox-prune.ts);
+ * records over INBOX_MAX_RECORD_BYTES are quarantined unread; one scan reads at
+ * most INBOX_SCAN_MAX records.
  */
 
-import {
-  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync,
-  unlinkSync, writeFileSync,
-} from 'fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
+import { atomicWrite0600, isCanonicalIso, readJsonBounded } from './claude-inbox-io';
+import { planPrune, readPruneLog, recordPrune, type PruneLog } from './claude-inbox-prune';
+
+export { atomicWrite0600 } from './claude-inbox-io';
 
 export type InboxStatus = 'queued' | 'delivered' | 'answered';
 
@@ -40,8 +39,12 @@ export interface InboxEntry {
   content: string;
   received_at: string;
   status: InboxStatus;
-  /** Who marked it delivered ('channel' | 'wait' | 'hook' | 'ack'), when known. */
+  /** Who marked it delivered ('wait' | 'hook' | 'ack' | 'reply'), when known. */
   delivered_via?: string;
+  /** When it was marked delivered, when known. */
+  delivered_at?: string;
+  /** When a hook last re-surfaced it as unanswered, when known. */
+  reminded_at?: string;
 }
 
 interface StoredRecord {
@@ -51,38 +54,59 @@ interface StoredRecord {
   received_at: string;
 }
 
+export interface InboxListOpts {
+  /** Only entries whose status is in this list. */
+  status?: readonly InboxStatus[];
+  chatId?: string;
+  /** Stop after this many matches. */
+  limit?: number;
+  /** Scan newest → oldest (result is still returned oldest first). */
+  newestFirst?: boolean;
+}
+
+export interface InboxStats {
+  /** Not yet claimed by any consumer (subset of unanswered). */
+  queued: number;
+  unanswered: number;
+  answered: number;
+  max_unanswered: number;
+  pruned_total: number;
+  last_pruned_at?: string;
+}
+
 export const INBOX_MAX_ENTRIES = 200;
+export const INBOX_MAX_UNANSWERED = 200;
 export const INBOX_MAX_CONTENT_CHARS = 32 * 1024;
 export const INBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Worst case JSON escaping of 32K chars is ~6 bytes/char, plus metadata. */
+export const INBOX_MAX_RECORD_BYTES = 256 * 1024;
+export const INBOX_SCAN_MAX = 1000;
+
+/** Thrown by append() when the inbox is full of unanswered messages. */
+export class InboxFullError extends Error {
+  constructor(readonly unanswered: number) {
+    super(`inbox full: ${unanswered} unanswered messages`);
+    this.name = 'InboxFullError';
+  }
+}
 
 /** `<13-digit ms>-<12 hex>` — sortable by name = chronological. Also the path guard. */
 export const INBOX_ID_RE = /^\d{13}-[0-9a-f]{12}$/;
 const CHAT_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 const MARKERS = ['delivered', 'answered'] as const;
 type Marker = (typeof MARKERS)[number];
+const AUX_SUFFIXES = ['delivered', 'answered', 'reminded'] as const;
+const SMALL_FILE_BYTES = 4096;
 
 /** Canonical inbox dir for a project root. */
 export function inboxDirFor(projectRoot: string): string {
   return join(projectRoot, '.gossip', 'bridge', 'inbox');
 }
 
-/** Write `data` to `path` atomically with mode 0600 (unique tmp + rename). */
-export function atomicWrite0600(path: string, data: string): void {
-  const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, data, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-  try {
-    renameSync(tmp, path);
-  } catch (e) {
-    try { unlinkSync(tmp); } catch { /* best effort */ }
-    throw e;
-  }
-}
-
 export class ClaudeInbox {
   /** id → immutable record cache (records never change once written). */
   private cache = new Map<string, StoredRecord>();
-  /** id → delivered-marker `via` cache (markers are immutable too). */
-  private viaCache = new Map<string, string>();
+  private lastPrune: PruneLog | null = null;
 
   constructor(private readonly dir: string) {}
 
@@ -96,17 +120,19 @@ export class ClaudeInbox {
     try { chmodSync(this.dir, 0o700); } catch { /* best effort */ }
   }
 
-  /** Persist a new queued message. Throws on invalid input or I/O failure. */
+  /** Persist a new queued message. Throws on invalid input, a full inbox, or I/O failure. */
   append(chatId: string, content: string, now: number = Date.now()): InboxEntry {
     if (!CHAT_ID_RE.test(chatId)) throw new Error('invalid chat_id');
     if (typeof content !== 'string' || content.length === 0) throw new Error('empty content');
     if (content.length > INBOX_MAX_CONTENT_CHARS) throw new Error('content too long');
     this.ensureDir();
+    this.prune(now);
+    const unanswered = this.stats().unanswered;
+    if (unanswered >= INBOX_MAX_UNANSWERED) throw new InboxFullError(unanswered);
     const id = `${String(now).padStart(13, '0')}-${randomBytes(6).toString('hex')}`;
     const rec: StoredRecord = { id, chat_id: chatId, content, received_at: new Date(now).toISOString() };
     atomicWrite0600(join(this.dir, `${id}.json`), JSON.stringify(rec));
     this.cache.set(id, rec);
-    this.prune(now);
     return { ...rec, status: 'queued' };
   }
 
@@ -128,11 +154,16 @@ export class ClaudeInbox {
     }
   }
 
+  /** Record that a hook re-surfaced an unanswered message (overwrites; throttle only). */
+  markReminded(id: string, now: number = Date.now()): void {
+    if (!INBOX_ID_RE.test(id) || !existsSync(join(this.dir, `${id}.json`))) return;
+    try { atomicWrite0600(join(this.dir, `${id}.reminded`), JSON.stringify({ at: new Date(now).toISOString() })); } catch { /* best effort */ }
+  }
+
   /** Mark every not-yet-answered entry of `chatId` received at/before now as answered. */
   markAnsweredForChat(chatId: string, now: number = Date.now()): number {
     let n = 0;
-    for (const e of this.list()) {
-      if (e.chat_id !== chatId || e.status === 'answered') continue;
+    for (const e of this.list({ chatId, status: ['queued', 'delivered'] })) {
       if (Date.parse(e.received_at) > now) continue;
       if (e.status === 'queued') this.mark(e.id, 'delivered', 'reply');
       if (this.mark(e.id, 'answered', 'reply')) n++;
@@ -140,8 +171,12 @@ export class ClaudeInbox {
     return n;
   }
 
-  /** All entries, oldest first. Missing/corrupt files are skipped. */
-  list(): InboxEntry[] {
+  /**
+   * Entries, oldest first. Status filtering uses directory names only (no
+   * reads); at most INBOX_SCAN_MAX records are read per call and the scan stops
+   * once `limit` matches are found. Missing/corrupt/invalid files are skipped.
+   */
+  list(opts: InboxListOpts = {}): InboxEntry[] {
     let names: string[];
     try {
       names = readdirSync(this.dir);
@@ -149,74 +184,103 @@ export class ClaudeInbox {
       return [];
     }
     const present = new Set(names);
+    const ids = names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter((id) => INBOX_ID_RE.test(id)).sort();
+    if (opts.newestFirst) ids.reverse();
     const out: InboxEntry[] = [];
-    for (const name of names.sort()) {
-      if (!name.endsWith('.json')) continue;
-      const id = name.slice(0, -5);
-      if (!INBOX_ID_RE.test(id)) continue;
-      const rec = this.readRecord(id);
-      if (!rec) continue;
+    let reads = 0;
+    for (const id of ids) {
+      if (opts.limit !== undefined && out.length >= opts.limit) break;
       const status: InboxStatus = present.has(`${id}.answered`)
         ? 'answered'
         : present.has(`${id}.delivered`) ? 'delivered' : 'queued';
+      if (opts.status && !opts.status.includes(status)) continue;
+      if (!this.cache.has(id) && ++reads > INBOX_SCAN_MAX) break;
+      const rec = this.readRecord(id);
+      if (!rec || (opts.chatId !== undefined && rec.chat_id !== opts.chatId)) continue;
       const entry: InboxEntry = { ...rec, status };
-      if (status !== 'queued') {
-        const via = this.readVia(id);
-        if (via) entry.delivered_via = via;
+      if (status !== 'queued') Object.assign(entry, this.readDelivered(id));
+      if (present.has(`${id}.reminded`)) {
+        const at = this.readAt(`${id}.reminded`);
+        if (at) entry.reminded_at = at;
       }
       out.push(entry);
     }
-    return out;
+    return opts.newestFirst ? out.reverse() : out;
   }
 
-  queued(): InboxEntry[] {
-    return this.list().filter((e) => e.status === 'queued');
+  queued(limit?: number): InboxEntry[] {
+    return this.list({ status: ['queued'], limit });
   }
 
   get(id: string): InboxEntry | null {
     if (!INBOX_ID_RE.test(id)) return null;
-    return this.list().find((e) => e.id === id) ?? null;
+    const rec = this.readRecord(id);
+    if (!rec) return null;
+    const has = (m: string): boolean => existsSync(join(this.dir, `${id}.${m}`));
+    const status: InboxStatus = has('answered') ? 'answered' : has('delivered') ? 'delivered' : 'queued';
+    const entry: InboxEntry = { ...rec, status };
+    if (status !== 'queued') Object.assign(entry, this.readDelivered(id));
+    const reminded = has('reminded') ? this.readAt(`${id}.reminded`) : undefined;
+    if (reminded) entry.reminded_at = reminded;
+    return entry;
   }
 
   /** True when any retained record belongs to `chatId` (trusted: written by the relay). */
   hasChatId(chatId: string): boolean {
-    return this.list().some((e) => e.chat_id === chatId);
+    return this.list({ chatId, limit: 1, newestFirst: true }).length > 0;
   }
 
-  /** Drop expired records and enforce the count cap (oldest first). */
-  prune(now: number = Date.now()): void {
+  /** Counts from directory names only, plus prune telemetry. */
+  stats(): InboxStats {
+    let names: string[] = [];
+    try { names = readdirSync(this.dir); } catch { /* empty */ }
+    const present = new Set(names);
+    let unanswered = 0;
+    let answered = 0;
+    let queued = 0;
+    for (const n of names) {
+      const id = n.slice(0, -5);
+      if (!n.endsWith('.json') || !INBOX_ID_RE.test(id)) continue;
+      if (present.has(`${id}.answered`)) answered++;
+      else {
+        unanswered++;
+        if (!present.has(`${id}.delivered`)) queued++;
+      }
+    }
+    const log = readPruneLog(this.dir);
+    const total = Math.max(log.total, this.lastPrune?.total ?? 0);
+    const s: InboxStats = { queued, unanswered, answered, max_unanswered: INBOX_MAX_UNANSWERED, pruned_total: total };
+    const last = log.at ?? this.lastPrune?.at;
+    if (last) s.last_pruned_at = last;
+    return s;
+  }
+
+  /**
+   * Age out ANSWERED records past retention and cap the answered count. Never
+   * deletes a queued or delivered-unanswered record (claude-inbox-prune.ts).
+   * Also reaps orphaned markers, stale tmp files and old quarantined records.
+   * Returns how many records were removed (persisted to inbox-prune.json).
+   */
+  prune(now: number = Date.now()): number {
     let names: string[];
     try {
       names = readdirSync(this.dir);
     } catch {
-      return;
+      return 0;
     }
-    const ids = names
-      .filter((n) => n.endsWith('.json') && INBOX_ID_RE.test(n.slice(0, -5)))
-      .map((n) => n.slice(0, -5))
-      .sort();
-    const drop = new Set<string>();
-    for (const id of ids) {
-      if (now - Number(id.slice(0, 13)) > INBOX_RETENTION_MS) drop.add(id);
-    }
-    const idSet = new Set(ids);
-    const kept = ids.filter((id) => !drop.has(id));
-    for (let i = 0; i < kept.length - INBOX_MAX_ENTRIES; i++) drop.add(kept[i]);
-    for (const id of drop) this.remove(id);
-    // Orphaned markers / stale tmp files from crashed writers.
-    for (const n of names) {
-      const base = n.split('.')[0];
-      const isMarker = MARKERS.some((m) => n === `${base}.${m}`);
-      if ((isMarker && !idSet.has(base)) || drop.has(base)) this.unlinkQuiet(n);
-      else if (n.endsWith('.tmp') && now - Number(base.slice(0, 13)) > 60_000) this.unlinkQuiet(n);
-    }
+    const plan = planPrune(names, now, {
+      idRe: INBOX_ID_RE, aux: AUX_SUFFIXES, retentionMs: INBOX_RETENTION_MS, maxAnswered: INBOX_MAX_ENTRIES,
+    });
+    for (const id of plan.drop) this.remove(id);
+    for (const n of plan.unlink) this.unlinkQuiet(n);
+    if (plan.drop.size > 0) this.lastPrune = recordPrune(this.dir, plan.drop.size, now);
+    return plan.drop.size;
   }
 
   private remove(id: string): void {
     this.cache.delete(id);
-    this.viaCache.delete(id);
     this.unlinkQuiet(`${id}.json`);
-    for (const m of MARKERS) this.unlinkQuiet(`${id}.${m}`);
+    for (const m of AUX_SUFFIXES) this.unlinkQuiet(`${id}.${m}`);
   }
 
   private unlinkQuiet(name: string): void {
@@ -226,31 +290,38 @@ export class ClaudeInbox {
   private readRecord(id: string): StoredRecord | null {
     const cached = this.cache.get(id);
     if (cached) return cached;
-    try {
-      const raw = JSON.parse(readFileSync(join(this.dir, `${id}.json`), 'utf-8')) as Partial<StoredRecord>;
-      if (raw.id !== id || typeof raw.chat_id !== 'string' || !CHAT_ID_RE.test(raw.chat_id)) return null;
-      if (typeof raw.content !== 'string' || typeof raw.received_at !== 'string') return null;
-      const rec: StoredRecord = {
-        id, chat_id: raw.chat_id, content: raw.content.slice(0, INBOX_MAX_CONTENT_CHARS), received_at: raw.received_at,
-      };
-      this.cache.set(id, rec);
-      return rec;
-    } catch {
+    const path = join(this.dir, `${id}.json`);
+    const r = readJsonBounded(path, INBOX_MAX_RECORD_BYTES);
+    if (r === 'oversized') {
+      // Never read it; move it aside so later scans don't keep paying for it.
+      try { renameSync(path, join(this.dir, `${id}.quarantine`)); } catch { /* best effort */ }
       return null;
     }
+    if (!r) return null;
+    const raw = r.value as Partial<StoredRecord> | null;
+    if (!raw || typeof raw !== 'object' || raw.id !== id) return null;
+    if (typeof raw.chat_id !== 'string' || !CHAT_ID_RE.test(raw.chat_id)) return null;
+    if (typeof raw.content !== 'string' || raw.content.length > INBOX_MAX_CONTENT_CHARS) return null;
+    if (!isCanonicalIso(raw.received_at)) return null;
+    const rec: StoredRecord = { id, chat_id: raw.chat_id, content: raw.content, received_at: raw.received_at };
+    this.cache.set(id, rec);
+    return rec;
   }
 
-  private readVia(id: string): string | undefined {
-    const cached = this.viaCache.get(id);
-    if (cached !== undefined) return cached;
-    try {
-      const raw = JSON.parse(readFileSync(join(this.dir, `${id}.delivered`), 'utf-8')) as { via?: unknown };
-      if (typeof raw.via !== 'string') return undefined;
-      const via = raw.via.slice(0, 32);
-      this.viaCache.set(id, via);
-      return via;
-    } catch {
-      return undefined;
-    }
+  private readDelivered(id: string): Pick<InboxEntry, 'delivered_via' | 'delivered_at'> {
+    const r = readJsonBounded(join(this.dir, `${id}.delivered`), SMALL_FILE_BYTES);
+    if (!r || r === 'oversized') return {};
+    const v = r.value as { via?: unknown; at?: unknown } | null;
+    const out: Pick<InboxEntry, 'delivered_via' | 'delivered_at'> = {};
+    if (v && typeof v.via === 'string' && /^[a-z]{1,16}$/.test(v.via)) out.delivered_via = v.via;
+    if (v && isCanonicalIso(v.at)) out.delivered_at = v.at;
+    return out;
+  }
+
+  private readAt(name: string): string | undefined {
+    const r = readJsonBounded(join(this.dir, name), SMALL_FILE_BYTES);
+    if (!r || r === 'oversized') return undefined;
+    const v = r.value as { at?: unknown } | null;
+    return v && isCanonicalIso(v.at) ? v.at : undefined;
   }
 }

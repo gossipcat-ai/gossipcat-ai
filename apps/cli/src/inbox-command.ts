@@ -8,7 +8,9 @@
  *       claim + print them fenced as UNTRUSTED data with the exact `reply`
  *       instruction, exit 0. Exit 2 on timeout (default 3600s; 0 = never),
  *       exit 3 if orphaned (parent died). Writes a heartbeat while blocked so
- *       the dashboard can show "listening".
+ *       the dashboard can show "listening", and a last-exit record on exit so
+ *       it can show "recent". A printed message that is never answered is
+ *       re-surfaced by the hooks after a grace period (inbox-format.ts).
  *   inbox list [--json] [--queued]    one sanitized line per entry
  *   inbox show <id>                    fenced full content (read-only)
  *   inbox ack <id> [--answered]        mark delivered (or answered)
@@ -69,8 +71,8 @@ export async function runInboxCommand(argv: string[], io: InboxIo): Promise<numb
         if (args.includes('--queued')) entries = entries.filter((e) => e.status === 'queued');
         if (args.includes('--json')) {
           // JSON.stringify escapes control chars, so raw content is terminal-safe here.
-          io.out(JSON.stringify(entries.map(({ id, chat_id, status, received_at, delivered_via }) =>
-            ({ id, chat_id, status, received_at, delivered_via })), null, 2) + '\n');
+          io.out(JSON.stringify(entries.map(({ id, chat_id, status, received_at, delivered_via, delivered_at }) =>
+            ({ id, chat_id, status, received_at, delivered_via, delivered_at })), null, 2) + '\n');
           return 0;
         }
         if (entries.length === 0) { io.out('[gossipcat inbox] empty\n'); return 0; }
@@ -132,7 +134,8 @@ function waitForMessages(root: string, timeoutSec: number, max: number, io: Inbo
       process.removeListener('SIGTERM', onSignal);
       process.removeListener('SIGINT', onSignal);
       try { watcher?.close(); } catch { /* ignore */ }
-      clearWatcherHeartbeat(root);
+      // Records the last-exit time (dashboard `recent` state) and drops the heartbeat.
+      clearWatcherHeartbeat(root, code);
       if (text) io.out(text);
       resolveP(code);
     };

@@ -42,11 +42,16 @@ interface BufferedMessage {
 
 export interface BridgeHost {
   /**
-   * Deliver a dashboard message to the live CC session. Returns true when the
-   * notification was sent (or buffered for imminent retry), false when it could
-   * be neither sent nor buffered (buffer full of fresh entries). Synchronous
-   * return so the relay sink can answer the dashboard POST immediately; the
-   * actual stdio send is fire-and-forget.
+   * Hand a dashboard message to the live CC session's stdio transport. Returns
+   * true when the notification was handed off or buffered for retry.
+   *
+   * DELIVERY RULE: `true` is NOT delivery. The send is fire-and-forget, the
+   * buffer is lossy (oldest evicted), and Claude Code silently drops
+   * `claude/channel` notifications without --channels. The relay therefore
+   * never marks a durable-inbox entry delivered from this result — the entry
+   * stays queued until `inbox wait` / a hook / `ack` claims it or `reply`
+   * answers the chat (docs/CLAUDE_INBOX.md). Duplicates are acceptable; losses
+   * are not.
    */
   deliverBridgeMessage(chatId: string, content: string): boolean;
   /** Flush any buffered messages — call after the transport connects. */

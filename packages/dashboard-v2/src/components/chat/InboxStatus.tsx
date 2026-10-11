@@ -70,6 +70,12 @@ export function isClaudeReachable(link: ClaudeLink | null): boolean {
   return link?.state === 'channel' || link?.state === 'listening';
 }
 
+/** Tooltip: when the inbox watcher last exited / was last seen. */
+export function linkTitle(link: ClaudeLink | null): string | undefined {
+  if (link?.last_exit) return `inbox watcher exited ${link.last_exit}`;
+  return link?.last_seen ? `last inbox heartbeat ${link.last_seen}` : undefined;
+}
+
 export function ClaudeLinkBadge({ link, lang = 'en' }: { link: ClaudeLink | null; lang?: InboxLang }) {
   const state = link?.state ?? 'unknown';
   const tone = LINK_TONE[state];
@@ -78,7 +84,7 @@ export function ClaudeLinkBadge({ link, lang = 'en' }: { link: ClaudeLink | null
       className="inline-flex items-center gap-1.5 text-xs"
       data-testid="claude-link"
       data-state={state}
-      title={link?.last_seen ? `last inbox heartbeat ${link.last_seen}` : undefined}
+      title={linkTitle(link)}
     >
       <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: `var(--${tone})` }} aria-hidden />
       <span style={{ color: `var(--${tone})` }}>{LINK_TEXT[lang][state]}</span>
