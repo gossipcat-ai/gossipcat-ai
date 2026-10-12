@@ -199,7 +199,8 @@ describe('hook injection', () => {
 
   it('caps the TOTAL hook output and never claims a message it did not print (I7)', () => {
     const ids = [];
-    for (let i = 0; i < 6; i++) ids.push(inbox.append('c', `${i}`.repeat(5000)).id);
+    const t0 = Date.now(); // distinct ms per append so id order == insertion order
+    for (let i = 0; i < 6; i++) ids.push(inbox.append('c', `${i}`.repeat(5000), t0 + i).id);
     const out = renderPromptHookInjection(root, {});
     expect(out.length).toBeLessThanOrEqual(HOOK_MAX_TOTAL_CHARS);
     const shown = (out.match(/<<<UNTRUSTED_DASHBOARD_MESSAGE /g) ?? []).length;

@@ -2,7 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "paths": {
+      "@gossip/relay/dashboard/*": ["../../packages/relay/dist/dashboard/*"]
+    }
   },
   "include": ["src"]
 }
