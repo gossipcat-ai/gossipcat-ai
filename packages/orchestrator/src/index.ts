@@ -299,7 +299,9 @@ export {
   FINDING_RESOLVER_INTERNALS,
 } from './finding-resolver';
 export type { ResolveOptions, ResolveResult, ResolveSkipped, SymbolPresence } from './finding-resolver';
-export { codexBridgeRequest } from './codex-bridge-client';
+export { codexBridgeRequest, codexBridgeSocket } from './codex-bridge-client';
+export { CodexBridgeQueue } from './codex-bridge-queue';
+export type { BridgeJob } from './codex-bridge-queue';
 export { CodexWorker } from './codex-worker';
 export { TaskStreamEventType } from './task-stream';
 export type { TaskStreamEvent } from './task-stream';

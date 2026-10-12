@@ -1,7 +1,7 @@
 import {createServer,request,IncomingMessage,ServerResponse,Server} from 'http';
 import {readFileSync,writeFileSync,existsSync,statSync} from 'fs';
 import {join,resolve,extname} from 'path';
-import {codexChatHistory,sendCodexChat} from '../../../packages/relay/src/dashboard/api-codex-chat';
+import {codexChatHistory,sendCodexChat} from '@gossip/relay';
 
 const MAX_CHAT_BODY=64_000;
 // Same shape as the relay's DashboardRouter.allowChatTurn: per-IP minimum

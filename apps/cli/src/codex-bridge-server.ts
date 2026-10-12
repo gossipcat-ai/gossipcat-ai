@@ -2,9 +2,9 @@ import { startSharedChatWeb } from './shared-chat-web';
 import { createServer } from 'http';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, chmodSync, realpathSync, lstatSync } from 'fs';
 import { join, resolve } from 'path';
-import { CodexBridgeQueue } from '../../../packages/orchestrator/src/codex-bridge-queue';
-import { codexBridgeSocket } from '../../../packages/orchestrator/src/codex-bridge-client';
-import { CodexWorker } from '../../../packages/orchestrator/src/codex-worker';
+import { CodexBridgeQueue } from '@gossip/orchestrator';
+import { codexBridgeSocket } from '@gossip/orchestrator';
+import { CodexWorker } from '@gossip/orchestrator';
 import { acquireOwnerLock } from './codex-bridge-lock';
 import { publicJob, jobSummary, conversationJob, parsePage, CONVERSATION_LIMIT } from './codex-bridge-views';
 

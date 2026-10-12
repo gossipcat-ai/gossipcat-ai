@@ -1,4 +1,4 @@
-import { BridgeJob } from '../../../packages/orchestrator/src/codex-bridge-queue';
+import type { BridgeJob } from '@gossip/orchestrator';
 
 /**
  * Response shapes for the bridge socket. Listing endpoints must stay well under
