@@ -4,18 +4,51 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-13
+
+Follow-up to 0.9.0: the dashboard reply tool is renamed, the Codex bridge
+service script ships in the package, and the inbox recovers unanswered
+messages while a session is idle.
+
+### Breaking
+
+- **The dashboard reply tool `reply` is now `gossip_chat_reply`** (PRs #763,
+  #764), matching the `gossip_` prefix of every other tool. Arguments and
+  behavior are unchanged. There is no alias: reconnect (`/mcp`) after
+  upgrading so the session picks up the new tool name; the server's own
+  instructions already use it.
+
+### Added
+
+- **Idle recovery for the inbox** (PR #768) — `gossipcat inbox wait` now also
+  resurfaces a delivered-but-unanswered message after the grace period, so a
+  message whose output was lost is shown again even when nobody types a new
+  prompt. At most 6 automatic reminders per message, with a one-time note
+  when the limit is reached; hooks and the watcher never remind twice for the
+  same step.
+- **Per-session listeners** (PR #768) — each `inbox wait` writes its own
+  heartbeat, so two open sessions no longer overwrite each other, and the
+  dashboard link carries a `listeners` count.
+- **Agent-mail expiry** (PR #768) — agent mail in either direction closes as
+  expired 24 hours after its latest activity. Human messages never expire.
+  `inbox list --json` shows `outcome: expired`.
+
 ### Fixed
 
-- `scripts/codex-bridge-service.py` now ships in the npm package and serves the
-  project it is run from (or `--project <path>`), instead of assuming the
-  gossipcat install directory is the project.
+- `scripts/codex-bridge-service.py` now ships in the npm package and serves
+  the project it is run from (or `--project <path>`) instead of assuming the
+  gossipcat install directory is the project (PR #766).
+- The hint under each dashboard inbox message named the removed `reply` tool;
+  it now names `gossip_chat_reply` (PR #767).
+- Inbox temp files are aged by their own modification time, and the watchers
+  directory must be a real directory owned by the user (PR #768).
 
-### Changed
+### Upgrading
 
-- **Breaking:** the dashboard reply tool `reply` is renamed to
-  `gossip_chat_reply`, matching the `gossip_` prefix of every other tool. The
-  arguments and behavior are unchanged. There is no alias; the server's own
-  instructions name the new tool, so reconnect (`/mcp`) after upgrading.
+- Reconnect the MCP server (`/mcp`) after upgrading — required for the
+  `gossip_chat_reply` rename.
+- Restart any running `gossipcat inbox wait` so it uses the new reminder and
+  heartbeat files.
 
 ## [0.9.0] — 2026-10-13
 
