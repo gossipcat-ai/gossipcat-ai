@@ -1,6 +1,6 @@
 /**
  * cc-bridge channel notification meta: the durable-inbox id rides along as
- * `inbox_id` so a channel-mode `reply` can pass it as in_reply_to.
+ * `inbox_id` so a channel-mode `gossip_chat_reply` can pass it as in_reply_to.
  */
 import { createBridgeHost, CC_CHANNEL_NOTIFICATION } from '../../apps/cli/src/cc-bridge';
 

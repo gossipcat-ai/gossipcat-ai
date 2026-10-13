@@ -70,7 +70,7 @@ export function fenceMessage(e: InboxEntry, maxChars?: number, label?: string): 
   const nonce = pickNonce([body, ...meta]);
   const hint = agent
     ? `→ only if a response is warranted: MCP tool \`gossip_inbox_send\` with to "${headerSafe(e.from)}" and in_reply_to "${id}" (delivered on that agent's next dispatch).`
-    : `→ answer with the MCP tool \`reply\` using chat_id "${chatId}" (verbatim) and in_reply_to "${id}".`;
+    : `→ answer with the MCP tool \`gossip_chat_reply\` using chat_id "${chatId}" (verbatim) and in_reply_to "${id}".`;
   return [
     ...(label ? [label] : []),
     `<<<${tag} ${nonce} ${meta.join(' ')}>>>`,

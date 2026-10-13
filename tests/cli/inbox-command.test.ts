@@ -43,7 +43,8 @@ describe('inbox wait', () => {
     expect(text).toContain('UNTRUSTED_DASHBOARD_MESSAGE');
     expect(text).toContain(`id=${e.id} chat_id=chat-1`);
     expect(text).toContain('please run the tests');
-    expect(text).toContain('`reply` using chat_id "chat-1"');
+    expect(text).toContain('`gossip_chat_reply` using chat_id "chat-1"');
+    expect(text).not.toMatch(/`reply`/); // the removed tool name must never be suggested
     expect(text).toContain('gossipcat inbox wait');
     expect(inbox.get(e.id)).toMatchObject({ status: 'delivered', delivered_via: 'wait' });
     expect(existsSync(watcherHeartbeatPathFor(root))).toBe(false); // cleared on exit
