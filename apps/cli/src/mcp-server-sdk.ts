@@ -315,6 +315,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createBridgeHost } from './cc-bridge';
 import { isChannelModeConfirmed } from './inbox-format';
 import { INBOX_ID_RE } from '@gossip/relay/dashboard/claude-inbox';
+import { createInboxAgentMail } from '@gossip/relay/dashboard/agent-mail';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -1012,6 +1013,7 @@ async function doBoot() {
     })(),
     keyProvider: async (provider: string) => ctx.keychain.getKey(provider),
     siblingRoots: configuredSiblingRoots,
+    agentMail: createInboxAgentMail(process.cwd()),
     toolServer: ctx.toolServer ? {
       assignScope: (agentId: string, scope: string) => ctx.toolServer.assignScope(agentId, scope),
       assignRoot: (agentId: string, root: string) => ctx.toolServer.assignRoot(agentId, root),
@@ -2135,6 +2137,33 @@ export function createMcpServer(): McpServer {
         return { content: [{ type: 'text' as const, text: `Reply queued for delivery: no dashboard stream for chat_id ${chat_id} is open right now; it will be shown when the dashboard reconnects.` }] };
       }
       return { content: [{ type: 'text' as const, text: `Sent reply to dashboard (chat_id ${chat_id}).` }] };
+    },
+  );
+
+  // ── Agent mail: orchestrator → agent (spec 2026-10-13-agent-inbox-addressing) ─
+  // Delivered into the agent's prompt on its next dispatch. `from` is stamped
+  // 'orchestrator'; `to` must be a configured agent id (validated in the handler).
+  // Orchestrator-only tool (no caller auth): never add it to agent tool allowlists.
+  server.tool(
+    'gossip_inbox_send',
+    'Send a short message from the orchestrator to a configured agent. It is delivered (fenced as untrusted data) into that agent\'s prompt on its next dispatch; the agent can answer with an <agent_message in_reply_to="..."> tag. Not for tasks, results or findings — use gossip_run / gossip_dispatch for work. To answer the human use `reply`. Pass in_reply_to with an agent message id (from its inbox fence) to close it. Returns the new inbox id.',
+    {
+      to: z.string().describe('A configured agent id (from .gossip/config.json). Not "human" or "orchestrator".'),
+      text: z.string().describe('The message text (at most what one dispatch can deliver whole; longer text is rejected).'),
+      kind: z.enum(['chat', 'notice', 'answer']).optional().describe('Message kind (default "chat").'),
+      ref: z.object({
+        task_id: z.string().optional(),
+        finding_id: z.string().optional(),
+        file: z.string().optional(),
+      }).optional().describe('Optional reference: task_id, finding_id (<consensus_id>:<agent>:fN) or file path. Invalid values are dropped.'),
+      in_reply_to: z.string().optional().describe('Inbox id of the agent message this answers.'),
+    },
+    async (args) => {
+      const { sendInboxMail } = await import('./handlers/inbox-send');
+      const r = sendInboxMail(process.cwd(), args);
+      if (!r.ok) return { content: [{ type: 'text' as const, text: `gossip_inbox_send error: ${r.error}` }], isError: true };
+      const closedNote = r.closed ? ` Closed ${args.in_reply_to}.` : '';
+      return { content: [{ type: 'text' as const, text: `Queued inbox message ${r.id} for ${args.to}; delivered on its next dispatch.${closedNote}` }] };
     },
   );
 
@@ -5926,6 +5955,7 @@ export function createMcpServer(): McpServer {
         { name: 'gossip_reload', desc: 'Terminate MCP server so Claude Code respawns with fresh bundle. Use after npm run build:mcp.' },
         { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
         { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
+        { name: 'gossip_inbox_send', desc: 'Send a short orchestrator message to a configured agent; delivered into its prompt on its next dispatch. Agents answer with <agent_message> tags.' },
         { name: 'gossip_ask_back', desc: 'Re-engage an agent after a fabrication for first-person root-cause analysis. action:"ask" dispatches the introspection prompt; action:"record" logs the answer.' },
       ];
       const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');

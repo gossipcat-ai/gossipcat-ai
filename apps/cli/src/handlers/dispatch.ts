@@ -263,6 +263,7 @@ export function tryWarmCacheHit(
   cacheKey: PromptCacheKey,
   promptFormat: PromptFormat | undefined,
   lessonBlock?: string,
+  mailBlock?: string,
 ): string | null {
   if (promptFormat !== 'elided') return null;
   if (!liveTaskBlock) return null;
@@ -272,7 +273,7 @@ export function tryWarmCacheHit(
   if (!existsSync(cached.skillsSectionPath)) return null;
   try {
     const skillsSection = require('fs').readFileSync(cached.skillsSectionPath, 'utf8');
-    return composeWarmBody(skillsSection, liveTaskBlock, lessonBlock);
+    return composeWarmBody(skillsSection, liveTaskBlock, lessonBlock, mailBlock);
   } catch {
     return null;
   }
@@ -294,21 +295,30 @@ export function tryWarmCacheHit(
  *
  * The cap re-check exists because the cached skills-section was sized by
  * `assemblePrompt` against a DIFFERENT task, so its priority-drop pass cannot
- * account for this dispatch. The lesson block is the lowest-priority optional
- * content in the body, so it is what gets dropped.
+ * account for this dispatch. The agent-mail block (inbox spec step 4) sits
+ * after the lessons, mirroring `inboxMail` in `assemblePrompt`, and is the
+ * lowest-priority optional content: on overflow try lessons + mail, then
+ * lessons only, then the bare body. Callers mark mail delivered only when its
+ * block is in the final prompt.
  */
 export function composeWarmBody(
   skillsSection: string,
   liveTaskBlock: string,
   lessonBlock?: string,
+  mailBlock?: string,
 ): string {
   const base = skillsSection + liveTaskBlock;
-  if (!lessonBlock) return base;
-  const withLessons = skillsSection.endsWith(ASSEMBLER_TASK_SEPARATOR)
+  const withBlock = (block: string): string => (skillsSection.endsWith(ASSEMBLER_TASK_SEPARATOR)
     ? skillsSection.slice(0, -ASSEMBLER_TASK_SEPARATOR.length)
-      + `\n\n${lessonBlock}${ASSEMBLER_TASK_SEPARATOR}${liveTaskBlock}`
-    : `${skillsSection}\n\n${lessonBlock}${liveTaskBlock}`;
-  return withLessons.length > MAX_ASSEMBLED_PROMPT_CHARS ? base : withLessons;
+      + `\n\n${block}${ASSEMBLER_TASK_SEPARATOR}${liveTaskBlock}`
+    : `${skillsSection}\n\n${block}${liveTaskBlock}`);
+  const both = [lessonBlock, mailBlock].filter((b): b is string => !!b).join('\n\n');
+  for (const block of [both, lessonBlock]) {
+    if (!block) continue;
+    const body = withBlock(block);
+    if (body.length <= MAX_ASSEMBLED_PROMPT_CHARS) return body;
+  }
+  return base;
 }
 
 /**
@@ -344,6 +354,7 @@ export function cacheColdPathStore(
   }
 }
 import { persistRelayTasks } from './relay-tasks';
+import { attachNativeAgentMail, prepareNativeAgentMail } from './native-agent-mail';
 import {
   prependScopeNote,
   prependUnverifiedNote,
@@ -947,10 +958,14 @@ export async function handleDispatchSingle(
     // routed through `retrievedLessons` (cold) / `composeWarmBody` (warm)
     // instead of being spliced into the finished prompt. See buildLessonBlock.
     const singleLessonBlock = buildLessonBlock({ agentId: agent_id, task, taskId });
+    // Agent mail (inbox spec step 4) — per-dispatch, so like lessons it never
+    // enters the warm cache. Ids that land in the final prompt are recorded on
+    // the native task and marked delivered only after a successful relay.
+    const singleMail = prepareNativeAgentMail(agent_id);
 
     let agentPrompt: string;
     let singleWarm = false;
-    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format, singleLessonBlock);
+    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format, singleLessonBlock, singleMail?.block);
     if (singleWarmBody) {
       agentPrompt = singleWarmBody;
       singleWarm = true;
@@ -977,10 +992,11 @@ export async function handleDispatchSingle(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey, singleLiveTaskTail);
       }
-      if (singleLessonBlock) {
-        agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock });
+      if (singleLessonBlock || singleMail) {
+        agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock || undefined, inboxMail: singleMail?.block });
       }
     }
+    attachNativeAgentMail(singleMail, agentPrompt, taskId); // persisted with the task map below
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B). SCOPE NOTE composes first
     // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
@@ -1413,9 +1429,11 @@ export async function handleDispatchParallel(
       agentId: def.agent_id, task: def.task, taskId, consensus,
     });
 
+    const parallelMail = prepareNativeAgentMail(def.agent_id); // see singleMail
+
     let agentPrompt: string;
     let parallelWarm = false;
-    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format, parallelLessonBlock);
+    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format, parallelLessonBlock, parallelMail?.block);
     if (parallelWarmBody) {
       agentPrompt = parallelWarmBody;
       parallelWarm = true;
@@ -1437,10 +1455,11 @@ export async function handleDispatchParallel(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey, parallelLiveTaskTail);
       }
-      if (parallelLessonBlock) {
-        agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock });
+      if (parallelLessonBlock || parallelMail) {
+        agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock || undefined, inboxMail: parallelMail?.block });
       }
     }
+    attachNativeAgentMail(parallelMail, agentPrompt, taskId); // persisted after the loop
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B) — per-def in the native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
@@ -1799,9 +1818,11 @@ export async function handleDispatchConsensus(
       agentId: def.agent_id, task: def.task, taskId, consensus: true,
     });
 
+    const consensusMail = prepareNativeAgentMail(def.agent_id); // see singleMail
+
     let agentPrompt: string;
     let consensusWarm = false;
-    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format, consensusLessonBlock);
+    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format, consensusLessonBlock, consensusMail?.block);
     if (consensusWarmBody) {
       agentPrompt = consensusWarmBody;
       consensusWarm = true;
@@ -1824,10 +1845,11 @@ export async function handleDispatchConsensus(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey, consensusLiveTaskTail);
       }
-      if (consensusLessonBlock) {
-        agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock });
+      if (consensusLessonBlock || consensusMail) {
+        agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock || undefined, inboxMail: consensusMail?.block });
       }
     }
+    if (attachNativeAgentMail(consensusMail, agentPrompt, taskId)) persistNativeTaskMap();
     // Premise verification (Component B) — per-def in the consensus native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
 

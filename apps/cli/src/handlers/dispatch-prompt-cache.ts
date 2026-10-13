@@ -23,6 +23,7 @@ import { createHash } from 'crypto';
 import { statSync, writeFileSync, renameSync, unlinkSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
+import { AGENT_MESSAGE_HINT } from '@gossip/orchestrator';
 
 export type TaskKind =
   | 'single'
@@ -57,15 +58,23 @@ export const DISPATCH_PROMPT_CACHE_MAX_ENTRIES = 64;
 const promptCache = new Map<string, PromptCacheEntry>();
 
 /**
+ * Version marker for assembler-owned template text inside the cached section.
+ * The agent-mail hint is in every assembled prompt; hashing its text into the
+ * fingerprint makes sections cached before it existed (or before it changed)
+ * miss instead of serving a prompt without it.
+ */
+export const PROMPT_TEMPLATE_MARKER = `agent-message-hint:${createHash('sha256').update(AGENT_MESSAGE_HINT).digest('hex').slice(0, 16)}`;
+
+/**
  * Compute the skill-set fingerprint. SHA-256 of sorted `<absPath>:<mtimeMs>`
- * pairs. Empty array → sha-256 of empty string. Path stat failures cause the
+ * pairs plus PROMPT_TEMPLATE_MARKER. Empty array → sha-256 of the marker alone. Path stat failures cause the
  * pair to be skipped (treated as "skill missing" — next cold load will surface
  * the real error). Symlink dedup is the caller's responsibility — pass
  * realpath-normalized paths (skillResult.paths is already realpath'd at
  * packages/orchestrator/src/skill-loader.ts:418-429).
  */
 export function computeSkillFingerprint(paths: string[]): string {
-  const pairs: string[] = [];
+  const pairs: string[] = [PROMPT_TEMPLATE_MARKER];
   for (const p of paths) {
     try {
       const st = statSync(p);

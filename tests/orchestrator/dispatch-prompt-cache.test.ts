@@ -15,6 +15,7 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
 import { assemblePrompt } from '../../packages/orchestrator/src/prompt-assembler';
 import { ctx } from '../../apps/cli/src/mcp-context';
@@ -24,6 +25,7 @@ import {
 } from '../../apps/cli/src/handlers/dispatch';
 import {
   computeSkillFingerprint,
+  PROMPT_TEMPLATE_MARKER,
   serializeKey,
   getCachedPrompt,
   setCachedPrompt,
@@ -394,11 +396,12 @@ describe('dispatch-prompt warm cache (Phase 2)', () => {
   });
 
   describe('Test 11: empty skill set caches normally', () => {
-    it('zero-skill agent gets a valid fingerprint (sha of empty) and a warm second dispatch', async () => {
+    it('zero-skill agent gets a valid fingerprint (sha of the template marker) and a warm second dispatch', async () => {
       const fp = computeSkillFingerprint([]);
       expect(fp).toMatch(/^[a-f0-9]{64}$/);
-      // sha256 of empty string is known
-      expect(fp).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+      expect(fp).toBe(createHash('sha256').update(PROMPT_TEMPLATE_MARKER).digest('hex'));
+      // Pre-hint fingerprint (sha256 of the empty string): old cache entries must miss.
+      expect(fp).not.toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
 
       registerNativeAgent();
       await handleDispatchSingle(

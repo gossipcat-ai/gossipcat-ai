@@ -36,6 +36,7 @@ import { parseAgentFindingsStrict } from './parse-findings';
 import { extractCategories } from './category-extractor';
 import { inferTaskType } from './task-type-inference';
 import { emitCompletionSignals } from './completion-signals';
+import type { AgentMailBatch, AgentMailPort } from './agent-mail-port';
 
 import { gossipLog as log } from './log';
 
@@ -64,6 +65,8 @@ export interface DispatchPipelineConfig {
   /** #520: declared external sibling repo roots, forwarded to ScopeTracker so scoped
    *  writes into a declared sibling are accepted. Default []. */
   siblingRoots?: readonly string[];
+  /** Agent mail (spec 2026-10-13-agent-inbox-addressing): injected by the CLI. */
+  agentMail?: AgentMailPort | null;
 }
 
 type TrackedTask = TaskEntry & {
@@ -172,6 +175,7 @@ export class DispatchPipeline {
   private gossipPublisher: GossipPublisher | null;
   private syncFactory: (() => TaskGraphSync | null) | null;
   private toolServer: ToolServerCallbacks | null;
+  private readonly agentMail: AgentMailPort | null;
   private isSyncing = false;
   private sessionContext: SessionContext;
 
@@ -220,6 +224,7 @@ export class DispatchPipeline {
     this.llm = config.llm ?? null;
     this.syncFactory = config.syncFactory ?? null;
     this.toolServer = config.toolServer ?? null;
+    this.agentMail = config.agentMail ?? null;
 
     this.taskGraph = new TaskGraph(config.projectRoot);
     this.memWriter = new MemoryWriter(config.projectRoot);
@@ -412,6 +417,8 @@ export class DispatchPipeline {
 
     // 5. Assemble prompt (include memory directory path so agent can write its own memory)
     const memoryDir = join(this.projectRoot, '.gossip', 'agents', agentId, 'memory', 'knowledge');
+    let mail: AgentMailBatch | null = null;
+    try { mail = this.agentMail?.prepare(agentId) ?? null; } catch { mail = null; }
     const promptContent = assemblePrompt({
       memory: memory || undefined,
       memoryDir,
@@ -426,7 +433,12 @@ export class DispatchPipeline {
       consensusFindings: consensusFindings.length > 0 ? consensusFindings : undefined,
       agentCorrections: agentCorrections.length > 0 ? agentCorrections : undefined,
       retrievedLessons: lessonBlock || undefined,
+      inboxMail: mail?.block,
     });
+    // Only mail that survived the assembler's size budget is in the prompt; it
+    // is marked delivered once this task returns a final result (FINAL_RESULT
+    // below). On error / timeout / cancel it stays queued for the next dispatch.
+    const mailInPrompt = mail && promptContent.includes(mail.block) ? mail : null;
 
     // 6. Record TaskGraph created
     this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
@@ -597,6 +609,14 @@ export class DispatchPipeline {
             // stops it from looking "running" on disk if an MCP reconnect lands
             // before the next dispatch/collect call rewrites the file (#736).
             this.pruneRelayTaskRecord(entry.id);
+            if (mailInPrompt) {
+              try { this.agentMail?.markDelivered(entry.agentId, mailInPrompt.ids, entry.id); } catch { /* best-effort */ }
+            }
+            // Agent mail: <agent_message> tags in the final result, stamped
+            // with this task's agent id (never the tag's). Never throws.
+            if (event.payload.result) {
+              try { this.agentMail?.acceptResult(entry.agentId, entry.id, event.payload.result); } catch { /* best-effort */ }
+            }
             // Emit task_completed + task_tool_turns + format_compliance + finding_dropped_format
             // via shared helper — eliminates native/relay signal-pipeline drift.
             emitCompletionSignals(this.projectRoot, {
