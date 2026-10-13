@@ -11,7 +11,7 @@
  *   - INBOUND (dashboard → CC): `deliverBridgeMessage(chatId, content)` emits a
  *     `notifications/claude/channel` notification over the stdio transport. The
  *     live CC orchestrator receives it as a `<channel source="gossipcat"
- *     chat_id="…">` event and is instructed to respond via the `reply` tool.
+ *     chat_id="…">` event and is instructed to respond via the `gossip_chat_reply` tool.
  *     stdio CAN push server→client notifications (spec "#1 unknown RESOLVED",
  *     verified against fakechat).
  *   - The relay registers `deliverBridgeMessage` as its in-process sink (no wire
@@ -37,7 +37,7 @@ const BUFFER_TTL_MS = 2 * 60 * 60 * 1000; // 2h idle, same as chat-session-store
 interface BufferedMessage {
   chatId: string;
   content: string;
-  /** Durable-inbox id, surfaced as channel meta so `reply` can pass it as in_reply_to. */
+  /** Durable-inbox id, surfaced as channel meta so `gossip_chat_reply` can pass it as in_reply_to. */
   inboxId?: string | null;
   queuedAt: number;
 }
@@ -51,7 +51,7 @@ export interface BridgeHost {
    * buffer is lossy (oldest evicted), and Claude Code silently drops
    * `claude/channel` notifications without --channels. The relay therefore
    * never marks a durable-inbox entry delivered from this result — the entry
-   * stays queued until `inbox wait` / a hook / `ack` claims it or `reply`
+   * stays queued until `inbox wait` / a hook / `ack` claims it or `gossip_chat_reply`
    * answers the chat (docs/CLAUDE_INBOX.md). Duplicates are acceptable; losses
    * are not.
    */

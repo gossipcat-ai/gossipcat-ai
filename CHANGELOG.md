@@ -4,6 +4,12 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard reply tool is now `gossip_chat_reply`, matching the `gossip_`
+  prefix of every other tool. `reply` remains as a deprecated alias with the
+  same arguments and behavior; it will be removed in a later minor release.
+
 ## [0.9.0] — 2026-10-13
 
 Messaging release. Dashboard messages now reach a plain `claude` /

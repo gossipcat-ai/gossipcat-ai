@@ -267,7 +267,7 @@ export class DashboardRouter {
   }
 
   /**
-   * Forward a reply from the live CC session (MCP `reply` tool) to the dashboard
+   * Forward a reply from the live CC session (MCP `gossip_chat_reply` tool) to the dashboard
    * over SSE. chat_id is re-validated + bound inside the hub (consensus f5).
    * Returns false when the id was unbound / malformed so the caller can no-op
    * honestly.

@@ -10,7 +10,7 @@
  *                    to, from, kind, qid?, ref?, in_reply_to?} (envelope:
  *                    claude-inbox-envelope.ts; legacy records lack it)
  *   <id>.delivered   marker {at, via}: shown to Claude (inbox wait / hook / ack)
- *   <id>.answered    marker: the MCP `reply` tool answered this chat_id
+ *   <id>.answered    marker: the MCP `gossip_chat_reply` tool answered this chat_id
  *   <id>.reminded    {at}: last time a hook re-surfaced it as unanswered
  *   <id>.quarantine  an oversized record moved aside (never read)
  *
@@ -179,7 +179,7 @@ export class ClaudeInbox {
   }
 
   /**
-   * Close the entries a `reply` answered. With `ids`: exactly those ids, and
+   * Close the entries a `gossip_chat_reply` answered. With `ids`: exactly those ids, and
    * only when they belong to `chatId` (unknown / other-chat ids are ignored);
    * a still-`queued` id Claude explicitly named is marked delivered(via
    * 'reply') first. Without `ids` (legacy / channel-mode reply): only entries

@@ -6,7 +6,7 @@
  * TRUST BOUNDARY: every argument is model-supplied. `from` is always
  * 'orchestrator' (stamped here). `to` must be an agent id configured in
  * .gossip/config.json (never 'human' / 'orchestrator' — the human is answered
- * with `reply`). kind/ref/in_reply_to are validated by the store and dropped
+ * with `gossip_chat_reply`). kind/ref/in_reply_to are validated by the store and dropped
  * when invalid.
  */
 import { readFileSync } from 'fs';

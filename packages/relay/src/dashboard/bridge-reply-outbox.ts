@@ -1,5 +1,5 @@
 /**
- * bridge-reply-outbox.ts — durable store for MCP `reply` texts that could not
+ * bridge-reply-outbox.ts — durable store for MCP `gossip_chat_reply` texts that could not
  * be delivered because no dashboard SSE stream for that chat_id was open.
  *
  * With the durable inbox, Claude routinely answers while the dashboard tab is
