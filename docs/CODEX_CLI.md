@@ -21,17 +21,16 @@ Mevcut `.gossip/config.json` içindeki `agents` nesnesine ekleyin:
 
 ## Kurulum ve yeniden başlatma
 
-Bu makinede gerçek repo `/Users/goku/Desktop/gossip`, global `gossipcat` bu repoya bağlıdır. Kaynak değişikliklerinden sonra:
+Global `gossipcat` bir gossipcat deposuna bağlıysa (`npm link`), kaynak değişikliklerinden sonra depo kökünde:
 
 ```sh
-cd /Users/goku/Desktop/gossip
 npm run build:all
 npm run build:mcp
 ```
 
 Claude Code içinde `/mcp` açın ve Gossipcat bağlantısını yeniden başlatın; reconnect eski MCP sürecini değiştirmiyorsa Claude Code'u kapatıp aynı proje dizininde yeniden başlatın. Çalışan görevler bittikten sonra yeniden başlatın. `gossip_status` ajanı gösterir; kullanılabilirliğin asıl kontrolü dispatch/collect sonucudur. Mevcut `.claude.json`, MCP ayarları ve Claude ajanları değiştirilmez.
 
-Codex Desktop'ın kurulu CLI'si macOS'ta otomatik bulunur; diğer sistemlerde `codex` PATH'ten alınır. Farklı bir binary için MCP sunucu ortamında `GOSSIP_CODEX_BIN=/tam/yol/codex` tanımlanabilir. CLI şu özellikleri desteklemelidir: `exec --json --output-schema --ignore-user-config --sandbox read-only`. `codex login status` bu kurulumda `Logged in using ChatGPT` döndürdü. Gerekirse normal terminalde `codex login` kullanın. API anahtarı gerekmiyor. Codex alt süreci yalnızca izinli ortam değişkenlerini alır: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TMPDIR`, `LANG`, `LC_*`, `CODEX_HOME` (ChatGPT girişi buradan okunur, varsayılan `~/.codex`), proxy değişkenleri (`HTTP(S)_PROXY`, `NO_PROXY`, `ALL_PROXY`, küçük harfli biçimleri) ve TLS ayarları (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `CODEX_CA_CERTIFICATE`). Claude ortamındaki API anahtarları, tokenlar ve diğer tüm değişkenler aktarılmaz (`codexChildEnv`, packages/orchestrator/src/codex-worker.ts).
+Codex Desktop'ın kurulu CLI'si macOS'ta otomatik bulunur; diğer sistemlerde `codex` PATH'ten alınır. Farklı bir binary için MCP sunucu ortamında `GOSSIP_CODEX_BIN=/tam/yol/codex` tanımlanabilir. CLI şu özellikleri desteklemelidir: `exec --json --output-schema --ignore-user-config --sandbox read-only`. Gerekirse normal terminalde `codex login` kullanın. API anahtarı gerekmiyor. Codex alt süreci yalnızca izinli ortam değişkenlerini alır: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TMPDIR`, `LANG`, `LC_*`, `CODEX_HOME` (ChatGPT girişi buradan okunur, varsayılan `~/.codex`), proxy değişkenleri (`HTTP(S)_PROXY`, `NO_PROXY`, `ALL_PROXY`, küçük harfli biçimleri) ve TLS ayarları (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `CODEX_CA_CERTIFICATE`). Claude ortamındaki API anahtarları, tokenlar ve diğer tüm değişkenler aktarılmaz (`codexChildEnv`, packages/orchestrator/src/codex-worker.ts).
 
 ## Kullanım: Claude Code / Gossipcat MCP
 
@@ -60,7 +59,6 @@ MCP üzerinden gerçek kaynak snapshot'ı verildi, Codex analiz etti ve Gossipca
 
 Bu Codex ajanının içinde başlatılan alt CLI, macOS'ta iç içe sandbox nedeniyle doğrudan dosya okuma komutlarında `sandbox_apply: Operation not permitted` aldı. Bu nedenle tamamlanan doğrulamada modülün gerçek, satır numaralı içeriği görev bağlamına kondu; doğrudan dosya erişimi başarıyla doğrulanmadı. Normal Claude Code terminalinden doğrudan dosya erişimi ayrıca denenmelidir. Sandbox'ı kapatan bir geçiş eklenmedi.
 
-Kod ileride upstream değişikliklerle birleştirilmelidir; npm/global yeniden kurulum yerel değişiklikleri kaldırabilir. Çalışma çıktıları ve rollback yedeği bu sohbetin `outputs` dizinindedir.
 
 
 Kalıcı kuyruk ve aynı oturumu sürdüren takip görevleri için [CODEX_BRIDGE.md](CODEX_BRIDGE.md) belgesine bakın.
