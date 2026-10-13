@@ -6,9 +6,10 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ### Changed
 
-- The dashboard reply tool is now `gossip_chat_reply`, matching the `gossip_`
-  prefix of every other tool. `reply` remains as a deprecated alias with the
-  same arguments and behavior; it will be removed in a later minor release.
+- **Breaking:** the dashboard reply tool `reply` is renamed to
+  `gossip_chat_reply`, matching the `gossip_` prefix of every other tool. The
+  arguments and behavior are unchanged. There is no alias; the server's own
+  instructions name the new tool, so reconnect (`/mcp`) after upgrading.
 
 ## [0.9.0] — 2026-10-13
 

@@ -2136,14 +2136,6 @@ export function createMcpServer(): McpServer {
       return { content: [{ type: 'text' as const, text: `Sent reply to dashboard (chat_id ${chat_id}).` }] };
     };
   server.tool('gossip_chat_reply', 'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message or a dashboard message from the durable inbox; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. If no dashboard stream is open the reply is queued and shown when the dashboard reconnects. Returns an error (no side effect) when the chat_id is unknown to the dashboard. For messages from the durable inbox, pass in_reply_to with the id(s) shown in the inbox fence (`id=...`) to close exactly those messages; without it only already-delivered messages of that chat are closed.', chatReplySchema, chatReply);
-  // Deprecated alias kept for one minor release so sessions and instructions
-  // written before the rename keep working. Remove after 0.10.
-  server.tool(
-    'reply',
-    'DEPRECATED alias of gossip_chat_reply (same arguments and behavior) — call gossip_chat_reply instead.',
-    chatReplySchema,
-    chatReply,
-  );
 
   // ── Agent mail: orchestrator → agent (spec 2026-10-13-agent-inbox-addressing) ─
   // Delivered into the agent's prompt on its next dispatch. `from` is stamped
