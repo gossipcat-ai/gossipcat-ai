@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """Manage the per-project macOS Codex bridge without touching Codex's own daemon."""
-import argparse, hashlib, os, plistlib, shutil, subprocess
+import argparse, hashlib, os, plistlib, shutil, subprocess, sys
 from pathlib import Path
-root=Path(__file__).resolve().parents[1]
+# pkg = where gossipcat is installed (the repo, or node_modules/gossipcat);
+# root = the project the bridge serves (its .gossip dir and socket key).
+pkg=Path(__file__).resolve().parents[1]
+p=argparse.ArgumentParser();p.add_argument('action',choices=['install','start','restart','stop','status','uninstall'])
+p.add_argument('--project',help='project root with the .gossip directory (default: current directory)');args=p.parse_args()
+root=Path(args.project or os.getcwd()).resolve()
+if not (root/'.gossip').is_dir():raise SystemExit('No .gossip directory in '+str(root)+'; run from the project root or pass --project')
 suffix=hashlib.sha256(str(root).encode()).hexdigest()[:16]
 label='ai.gossipcat.codex-bridge.'+suffix
 plist=Path.home()/'Library/LaunchAgents'/(label+'.plist')
 dir=root/'.gossip/codex-bridge'
-p=argparse.ArgumentParser();p.add_argument('action',choices=['install','start','restart','stop','status','uninstall']);args=p.parse_args()
 uid=os.getuid();service='gui/'+str(uid)+'/'+label
 if args.action=='install':
  node=shutil.which('node')
  if not node:raise SystemExit('node is required')
- script=root/'dist-mcp/codex-bridge-server.js'
+ script=pkg/'dist-mcp/codex-bridge-server.js'
  if not script.exists():raise SystemExit('Run npm run build:mcp first')
  dir.mkdir(parents=True,exist_ok=True,mode=0o700);plist.parent.mkdir(parents=True,exist_ok=True)
  config={'Label':label,'ProgramArguments':[node,str(script),str(root)],'WorkingDirectory':str(root),'RunAtLoad':True,'KeepAlive':True,'ThrottleInterval':10,'EnvironmentVariables':{'PATH':str(Path(node).parent)+':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'},'StandardOutPath':str(dir/'service.log'),'StandardErrorPath':str(dir/'service-error.log')}
  if plist.exists() and plistlib.loads(plist.read_bytes())!=config:raise SystemExit('Existing service configuration differs; inspect it before replacing')
  plist.write_bytes(plistlib.dumps(config));plist.chmod(0o600)
  (dir/'enabled').write_text('1\n');(dir/'enabled').chmod(0o600)
- print('Installed '+str(plist));print('Start: python3 scripts/codex-bridge-service.py start')
+ print('Installed '+str(plist));print('Start: python3 '+sys.argv[0]+' start')
 elif args.action=='start':
  check=subprocess.run(['launchctl','print',service],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  if check.returncode==0:print('Already running: '+service)

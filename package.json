@@ -26,6 +26,7 @@
     "docs/RULES.md",
     "docs/CURSOR_RULES.md",
     "scripts/postinstall.js",
+    "scripts/codex-bridge-service.py",
     "assets/hooks/discipline/**"
   ],
   "scripts": {

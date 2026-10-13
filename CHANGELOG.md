@@ -4,6 +4,12 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/codex-bridge-service.py` now ships in the npm package and serves the
+  project it is run from (or `--project <path>`), instead of assuming the
+  gossipcat install directory is the project.
+
 ### Changed
 
 - **Breaking:** the dashboard reply tool `reply` is renamed to

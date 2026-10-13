@@ -16,13 +16,22 @@ Köprü otomatik olarak yeni işi alır, çalıştırır ve worker'ın bekleyen 
 
 ## Kurulum
 
+Gossipcat deposunda, proje kökünden:
+
 ```sh
-cd /Users/goku/Desktop/gossip
 npm run build:all
 npm run build:mcp
 python3 scripts/codex-bridge-service.py install
 python3 scripts/codex-bridge-service.py start
 python3 scripts/codex-bridge-service.py status
+```
+
+npm ile kurulmuş gossipcat'te script paketle gelir. Komutları `.gossip` klasörünün bulunduğu proje kökünden çalıştırın (ya da `--project <yol>` verin):
+
+```sh
+python3 node_modules/gossipcat/scripts/codex-bridge-service.py install
+python3 node_modules/gossipcat/scripts/codex-bridge-service.py start
+# global kurulumda: python3 "$(npm root -g)/gossipcat/scripts/codex-bridge-service.py" install
 ```
 
 Claude Code içinde `/mcp` üzerinden Gossipcat bağlantısını yeniden başlatın. Çalışan görevleri tamamlamadan MCP'yi yeniden başlatmayın. Mevcut ajan yapılandırması korunur; önceden eklenen `codex-sol` kullanılmaya devam eder. Codex Desktop'ın kendi daemon'ı durdurulmaz veya yeniden yapılandırılmaz.
@@ -63,18 +72,15 @@ gossip_codex_bridge(action:"cancel", task_id:"dönen görev kimliği")
 ## Durdurma ve kaldırma
 
 ```sh
-cd /Users/goku/Desktop/gossip
 python3 scripts/codex-bridge-service.py stop
 python3 scripts/codex-bridge-service.py uninstall
 ```
 
-`stop` servisi durdurur ve bridge işaretini korur; dispatch servis kapalı hatası verir. `uninstall` LaunchAgent'ı ve `enabled` işaretini kaldırır, görev kayıtlarını korur; doğrudan önceki CLI worker yolu tekrar kullanılabilir. Kaynak kodu geri alma yedeği bu sohbetin outputs dizinindedir.
+`stop` servisi durdurur ve bridge işaretini korur; dispatch servis kapalı hatası verir. `uninstall` LaunchAgent'ı ve `enabled` işaretini kaldırır, görev kayıtlarını korur; doğrudan önceki CLI worker yolu tekrar kullanılabilir.
 
-## Bu kurulumun etkinleştirme durumu
+## Sorun giderme
 
-Kod, MCP bundle ve LaunchAgent kurulmuştur; plist doğrulaması başarılıdır. Bu Codex sandbox'ından `launchctl bootstrap` çağrısı `Input/output error (5)` döndürdü ve servis yüklenmedi. Sistem kayıt sorgusu da `Cannot run while sandboxed` dedi. Normal macOS Terminal'inde `python3 scripts/codex-bridge-service.py start` çalıştırılması gerekiyor; ardından Claude Code `/mcp` bağlantısını yeniden başlatın. Servis henüz arka planda etkin değildir.
-
-124 test (7 paket), build:all, build:mcp, backend tip kontrolü ve diff kontrolü başarılı. İki gerçek GPT-6.1 Sol görevi aynı oturumu sürdürdü; tekrar gönderim ve gerçek tamamlanmış sonucun daemon yeniden başlatma sonrası aynı kalması doğrulandı. Kaynak analizi testinde gerçek dosyanın satır numaralı içeriği görev bağlamına verildi; doğrudan dosya okumadaki macOS sandbox sınırı ayrıca doğrulanmalıdır.
+`start` komutu `launchctl bootstrap` hatası verirse (örneğin `Input/output error (5)` ya da `Cannot run while sandboxed`), komut sandbox içinde çalışıyordur. Aynı komutu normal bir macOS terminalinde çalıştırın, ardından Claude Code'da `/mcp` ile Gossipcat'i yeniden bağlayın.
 
 ## Claude'a giden mesajlar (kanal olmadan)
 
