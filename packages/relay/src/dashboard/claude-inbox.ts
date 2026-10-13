@@ -6,7 +6,9 @@
  * NEVER marks a message delivered by itself (see docs/CLAUDE_INBOX.md).
  *
  * Layout (`<root>/.gossip/bridge/inbox/`, dir 0700, files 0600):
- *   <id>.json        immutable record {id, chat_id, content, received_at}
+ *   <id>.json        immutable record {id, chat_id, content, received_at,
+ *                    to, from, kind, qid?, ref?, in_reply_to?} (envelope:
+ *                    claude-inbox-envelope.ts; legacy records lack it)
  *   <id>.delivered   marker {at, via}: shown to Claude (inbox wait / hook / ack)
  *   <id>.answered    marker: the MCP `reply` tool answered this chat_id
  *   <id>.reminded    {at}: last time a hook re-surfaced it as unanswered
@@ -28,12 +30,17 @@ import { join } from 'path';
 import { randomBytes } from 'crypto';
 import { atomicWrite0600, isCanonicalIso, readJsonBounded } from './claude-inbox-io';
 import { planPrune, readPruneLog, recordPrune, type PruneLog } from './claude-inbox-prune';
+import { resolveEnvelope, type InboxEnvelope, type ResolvedEnvelope } from './claude-inbox-envelope';
 
 export { atomicWrite0600 } from './claude-inbox-io';
+export {
+  DEFAULT_FROM, DEFAULT_KIND, DEFAULT_TO, INBOX_PARTY_RE,
+  type InboxEnvelope, type InboxKind, type InboxRef,
+} from './claude-inbox-envelope';
 
 export type InboxStatus = 'queued' | 'delivered' | 'answered';
 
-export interface InboxEntry {
+export interface InboxEntry extends ResolvedEnvelope {
   id: string;
   chat_id: string;
   content: string;
@@ -47,7 +54,7 @@ export interface InboxEntry {
   reminded_at?: string;
 }
 
-interface StoredRecord {
+interface StoredRecord extends ResolvedEnvelope {
   id: string;
   chat_id: string;
   content: string;
@@ -58,6 +65,8 @@ export interface InboxListOpts {
   /** Only entries whose status is in this list. */
   status?: readonly InboxStatus[];
   chatId?: string;
+  /** Only entries addressed to this party (legacy records count as 'orchestrator'). */
+  to?: string;
   /** Stop after this many matches. */
   limit?: number;
   /** Scan newest → oldest (result is still returned oldest first). */
@@ -120,17 +129,24 @@ export class ClaudeInbox {
     try { chmodSync(this.dir, 0o700); } catch { /* best effort */ }
   }
 
-  /** Persist a new queued message. Throws on invalid input, a full inbox, or I/O failure. */
-  append(chatId: string, content: string, now: number = Date.now()): InboxEntry {
+  /**
+   * Persist a new queued message. Throws on invalid input (including a present
+   * but invalid `to`/`from`), a full inbox, or I/O failure. Invalid optional
+   * envelope fields (kind/qid/ref/in_reply_to) are dropped. `envelope.from` must
+   * be stamped by the calling code, never parsed from `content`.
+   */
+  append(chatId: string, content: string, now: number = Date.now(), envelope: InboxEnvelope = {}): InboxEntry {
     if (!CHAT_ID_RE.test(chatId)) throw new Error('invalid chat_id');
     if (typeof content !== 'string' || content.length === 0) throw new Error('empty content');
     if (content.length > INBOX_MAX_CONTENT_CHARS) throw new Error('content too long');
+    const env = resolveEnvelope(envelope);
+    if (!env) throw new Error('invalid to/from');
     this.ensureDir();
     this.prune(now);
     const unanswered = this.stats().unanswered;
     if (unanswered >= INBOX_MAX_UNANSWERED) throw new InboxFullError(unanswered);
     const id = `${String(now).padStart(13, '0')}-${randomBytes(6).toString('hex')}`;
-    const rec: StoredRecord = { id, chat_id: chatId, content, received_at: new Date(now).toISOString() };
+    const rec: StoredRecord = { id, chat_id: chatId, content, received_at: new Date(now).toISOString(), ...env };
     atomicWrite0600(join(this.dir, `${id}.json`), JSON.stringify(rec));
     this.cache.set(id, rec);
     return { ...rec, status: 'queued' };
@@ -215,6 +231,7 @@ export class ClaudeInbox {
       if (!this.cache.has(id) && ++reads > INBOX_SCAN_MAX) break;
       const rec = this.readRecord(id);
       if (!rec || (opts.chatId !== undefined && rec.chat_id !== opts.chatId)) continue;
+      if (opts.to !== undefined && rec.to !== opts.to) continue;
       const entry: InboxEntry = { ...rec, status };
       if (status !== 'queued') Object.assign(entry, this.readDelivered(id));
       if (present.has(`${id}.reminded`)) {
@@ -226,8 +243,8 @@ export class ClaudeInbox {
     return opts.newestFirst ? out.reverse() : out;
   }
 
-  queued(limit?: number): InboxEntry[] {
-    return this.list({ status: ['queued'], limit });
+  queued(limit?: number, to?: string): InboxEntry[] {
+    return this.list({ status: ['queued'], limit, to });
   }
 
   get(id: string): InboxEntry | null {
@@ -321,7 +338,9 @@ export class ClaudeInbox {
     if (typeof raw.chat_id !== 'string' || !CHAT_ID_RE.test(raw.chat_id)) return null;
     if (typeof raw.content !== 'string' || raw.content.length > INBOX_MAX_CONTENT_CHARS) return null;
     if (!isCanonicalIso(raw.received_at)) return null;
-    const rec: StoredRecord = { id, chat_id: raw.chat_id, content: raw.content, received_at: raw.received_at };
+    const env = resolveEnvelope(raw);
+    if (!env) return null;
+    const rec: StoredRecord = { id, chat_id: raw.chat_id, content: raw.content, received_at: raw.received_at, ...env };
     this.cache.set(id, rec);
     return rec;
   }
