@@ -36,7 +36,7 @@ import { parseAgentFindingsStrict } from './parse-findings';
 import { extractCategories } from './category-extractor';
 import { inferTaskType } from './task-type-inference';
 import { emitCompletionSignals } from './completion-signals';
-import type { AgentMailBatch, AgentMailPort } from './agent-mail-port';
+import type { AgentMailBatch, AgentMailPort, TaskDoneOutcome } from './agent-mail-port';
 
 import { gossipLog as log } from './log';
 
@@ -682,6 +682,7 @@ export class DispatchPipeline {
     };
 
     entry.finalResultPromise = runTask();
+    if (options?.notifyOnDone) this.notifyWhenSettled(entry);
 
     // Update sequential queue tail
     if (options?.writeMode === 'sequential') {
@@ -690,6 +691,28 @@ export class DispatchPipeline {
 
     this.tasks.set(taskId, entry);
     return { taskId, finalResultPromise: entry.finalResultPromise };
+  }
+
+  /**
+   * Post ONE completion notice (never the result) when the task settles, on
+   * every terminal path: final result, worker error, external cancel, collect
+   * timeout, or a stream/setup failure. Skipped when the task was already
+   * consumed by collect. Best-effort: never throws into the pipeline.
+   */
+  private notifyWhenSettled(entry: TrackedTask): void {
+    const post = (outcome: TaskDoneOutcome, detail?: string): void => {
+      if (!this.agentMail || !this.tasks.has(entry.id)) return;
+      try { this.agentMail.notifyTaskDone(entry.agentId, entry.id, outcome, detail); } catch { /* best-effort */ }
+    };
+    entry.finalResultPromise.then(
+      () => post('completed'),
+      (err: unknown) => {
+        const detail = entry.error || (err instanceof Error ? err.message : String(err));
+        const outcome: TaskDoneOutcome = detail.startsWith('Cancelled') ? 'cancelled'
+          : detail.includes('timeout') || detail.includes('timed out') ? 'timeout' : 'failed';
+        post(outcome, outcome === 'failed' ? detail : undefined);
+      },
+    );
   }
 
   getTask(taskId: string): TaskEntry | undefined {
@@ -1044,6 +1067,11 @@ export class DispatchPipeline {
       })),
       ...orphanEntries, // Fix 4: include orphaned task entries
     ];
+
+    // The orchestrator is collecting these tasks: their completion notices are done.
+    if (this.agentMail && results.length > 0) {
+      try { this.agentMail.closeTaskNotices(results.map(r => r.id)); } catch { /* best-effort */ }
+    }
 
     // Consensus round
     let consensusReport: import('./consensus-types').ConsensusReport | undefined;

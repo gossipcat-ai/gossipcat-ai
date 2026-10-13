@@ -172,7 +172,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(result.warnings[0]).not.toContain('/tmp/worktree-b');
     // Relay options must NOT carry the discovered roots — auto-promotion off
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
     // Stash must NOT carry the discovered roots
     expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
   });
@@ -195,6 +195,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toEqual({
       resolutionRoots: ['/tmp/explicit-root'],
+      notifyOnDone: true,
     });
     expect(ctx.pendingDispatchResolutionRoots.get('t-1')).toEqual(['/tmp/explicit-root']);
   });
@@ -238,7 +239,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(sentinelIdx).toBeGreaterThan(warningsIdx);
     // No injection — relay options should stay empty
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 5 — When Layer 1 fires (flag ON + worktrees discovered), the
@@ -262,7 +263,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     // Layer 2 "OFF but worktrees exist" must NOT fire (we're not OFF)
     expect(result.warnings[0]).not.toMatch(/autoDiscoverWorktrees is OFF/);
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.
@@ -285,7 +286,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(result.content[0].text).toContain('WARNINGS:');
     // No roots injected — relay options should stay empty
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 7 — failure isolation: discoverGitWorktrees throws → dispatch still
@@ -301,7 +302,7 @@ describe('handleDispatchConsensus — dispatch-time worktree auto-discovery (iss
     expect(result.content).toBeDefined();
     expect(result.warnings).toBeUndefined();
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
     expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
   });
 });

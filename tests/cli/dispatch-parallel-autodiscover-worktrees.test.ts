@@ -163,7 +163,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(result.warnings[0]).not.toContain('/tmp/worktree-a');
     expect(result.warnings[0]).not.toContain('/tmp/worktree-b');
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
     expect(ctx.pendingDispatchResolutionRoots.size).toBe(0);
   });
 
@@ -185,6 +185,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
     expect(dispatchParallelCall[0][0].options).toEqual({
       resolutionRoots: ['/tmp/explicit-root'],
+      notifyOnDone: true,
     });
   });
 
@@ -222,7 +223,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(result.content[0].text).toContain('WARNINGS:');
     // No injection — relay options should stay empty (no write_mode, no roots)
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 5 — Layer 1 warning takes the channel; Layer 2 "flag is OFF" does NOT
@@ -244,7 +245,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(result.warnings[0]).toMatch(/auto-promotion is disabled/);
     expect(result.warnings[0]).not.toMatch(/autoDiscoverWorktrees is OFF/);
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 6 — F4: flag ON, no discovered, rejected > 0 → warning in response.
@@ -268,7 +269,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(result.content[0].text).toContain('WARNINGS:');
     // No roots injected
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Case 7 — failure isolation: discoverGitWorktrees throws → dispatch still
@@ -285,7 +286,7 @@ describe('handleDispatchParallel(consensus:true) — dispatch-time worktree auto
     expect(result.content).toBeDefined();
     expect(result.warnings).toBeUndefined();
     const dispatchParallelCall = (ctx.mainAgent.dispatchParallel as jest.Mock).mock.calls[0];
-    expect(dispatchParallelCall[0][0].options).toBeUndefined();
+    expect(dispatchParallelCall[0][0].options).toEqual({ notifyOnDone: true });
   });
 
   // Guard: auto-discovery must NOT run when consensus=false.
