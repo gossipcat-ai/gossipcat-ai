@@ -161,6 +161,22 @@ Agents and the orchestrator exchange short notes through the same store.
   as `expired` (`outcome: "expired"` in `--json`), it gets an `<id>.expired`
   tag counted in `stats.expired`, and the count goes to `expired_agent_mail` in
   `inbox-prune.json`. Dashboard messages from the human never expire.
+- **Task completion notices.** Native agents wake Claude Code when they
+  finish; relay agents (for example codex-sol, or relay workers) run inside the
+  MCP server and wake nothing. When a relay task dispatched by `gossip_run`,
+  `gossip_dispatch` (single, parallel, consensus) reaches a terminal state
+  (completed, failed, cancelled or timed out), the server posts ONE short
+  `kind: notice` into the orchestrator inbox: `from` is the agent, `ref.task_id`
+  is the task, the text says `Task <id> (<agent>) <outcome>. Collect the result
+  with gossip_collect(task_ids: ["<id>"])` (failures add a sanitized detail of
+  at most 200 chars). The `inbox wait` watcher and the hooks surface it with a
+  `gossip_collect` hint. A notice never carries the result: results stay on
+  `gossip_collect`, so signals and scoring are unchanged. At most one notice per
+  task. Notices use the agent-mail quotas (20 per agent, human slots reserved),
+  so a refused one is logged and dropped. In-process dispatches that await the
+  result themselves (cross-review, auto-verify) and native tasks post none.
+  `gossip_collect` closes the notice of every task it collects (`answered`, `via
+  collected`).
 - **Orchestrator → agent.** `gossip_inbox_send(to, text, kind?, ref?, in_reply_to?)`
   queues a note for a configured agent. It is orchestrator-only and must never
   be added to an agent's tool allowlist. Text longer than one dispatch can carry

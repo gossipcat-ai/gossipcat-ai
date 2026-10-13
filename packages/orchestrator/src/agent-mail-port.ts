@@ -25,4 +25,14 @@ export interface AgentMailPort {
   markDelivered(agentId: string, ids: readonly string[], taskId: string): unknown;
   /** Write the `<agent_message>` tags of a validated task result as mail from `agentId`. */
   acceptResult(agentId: string, taskId: string, result: string): unknown;
+  /**
+   * Post ONE short completion notice (never the result itself) for a relay task
+   * that reached a terminal state, so the orchestrator is woken to gossip_collect.
+   * Idempotent per task id.
+   */
+  notifyTaskDone(agentId: string, taskId: string, outcome: TaskDoneOutcome, detail?: string): unknown;
+  /** Close the open completion notices of tasks the orchestrator just collected. */
+  closeTaskNotices(taskIds: readonly string[]): unknown;
 }
+
+export type TaskDoneOutcome = 'completed' | 'failed' | 'cancelled' | 'timeout';

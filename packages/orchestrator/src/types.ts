@@ -185,6 +185,14 @@ export interface ArchivedTaskEntry {
 
 /** Options for write-mode dispatch */
 export interface DispatchOptions {
+  /**
+   * Post a completion notice into the orchestrator inbox when this relay task
+   * reaches a terminal state (agent-mail-port.ts#notifyTaskDone). Set only by
+   * dispatches whose result is collected LATER by the orchestrator; in-process
+   * dispatches that await the result themselves (cross-review, auto-verify,
+   * tool-router) leave it off.
+   */
+  notifyOnDone?: boolean;
   writeMode?: 'sequential' | 'scoped' | 'worktree';
   scope?: string;
   timeoutMs?: number;

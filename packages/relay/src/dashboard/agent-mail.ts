@@ -24,6 +24,7 @@ import {
 } from './claude-inbox';
 import { parseAgentMessages } from './agent-message-parser';
 import { headerSafe, pickNonce, sanitizeUntrusted } from './inbox-fence';
+import { closeTaskNotices, postTaskDoneNotice, type TaskDoneOutcome } from './agent-mail-notice';
 
 /** Max messages injected into one dispatch prompt. */
 export const AGENT_MAIL_MAX_MESSAGES = 5;
@@ -234,6 +235,8 @@ export interface InboxAgentMail {
   prepare(agentId: string): AgentMailBatch | null;
   markDelivered(agentId: string, ids: readonly string[], taskId: string): number;
   acceptResult(agentId: string, taskId: string, result: string): string[];
+  notifyTaskDone(agentId: string, taskId: string, outcome: TaskDoneOutcome, detail?: string): string | null;
+  closeTaskNotices(taskIds: readonly string[]): number;
 }
 
 /** Inbox-backed agent mail for a project root. Never throws. */
@@ -246,5 +249,11 @@ export function createInboxAgentMail(projectRoot: string, log: Log = stderrLog):
     prepare: (agentId) => guard('prepare', null, () => prepareAgentMail(inbox, agentId)),
     markDelivered: (agentId, ids, taskId) => guard('mark', 0, () => markAgentMailDelivered(inbox, agentId, ids, taskId)),
     acceptResult: (agentId, taskId, result) => guard('accept', [] as string[], () => acceptAgentMessages(inbox, agentId, taskId, result, log)),
+    notifyTaskDone: (agentId, taskId, outcome, detail) => guard('task notice', null, () => {
+      const chatId = agentChatId(agentId);
+      if (!chatId) return null;
+      return postTaskDoneNotice(inbox, chatId, agentMailRoom(inbox, agentId), agentId, taskId, outcome, detail, log);
+    }),
+    closeTaskNotices: (taskIds) => guard('close notices', 0, () => closeTaskNotices(inbox, taskIds)),
   };
 }

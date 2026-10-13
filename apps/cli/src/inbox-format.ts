@@ -73,7 +73,9 @@ export function fenceMessage(e: InboxEntry, maxChars?: number, label?: string): 
     body = body.slice(0, maxChars);
   }
   const nonce = pickNonce([body, ...meta]);
-  const hint = agent
+  const hint = agent && e.kind === 'notice' && e.ref?.task_id
+    ? `→ task finished: collect it with the MCP tool \`gossip_collect\` (task_ids: ["${headerSafe(e.ref.task_id)}"]); no reply needed.`
+    : agent
     ? `→ only if a response is warranted: MCP tool \`gossip_inbox_send\` with to "${headerSafe(e.from)}" and in_reply_to "${id}" (delivered on that agent's next dispatch).`
     : `→ answer with the MCP tool \`gossip_chat_reply\` using chat_id "${chatId}" (verbatim) and in_reply_to "${id}".`;
   return [

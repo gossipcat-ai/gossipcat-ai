@@ -826,6 +826,7 @@ export async function handleDispatchSingle(
   if (images && images.length > 0) {
     options.images = [...images];
   }
+  options.notifyOnDone = true; // relay task: wake the orchestrator when it finishes
   const dispatchOptions = Object.keys(options).length > 0 ? options : undefined;
 
   // Native agent bridge: return Agent tool instructions instead of relay dispatch
@@ -1298,7 +1299,7 @@ export async function handleDispatchParallel(
         // resolutionRoots into per-task options. write_mode-only tasks get a
         // fresh options object; tasks with neither still get options if roots
         // are present.
-        const opts: Record<string, unknown> = {};
+        const opts: Record<string, unknown> = { notifyOnDone: true };
         if (d.write_mode) {
           opts.writeMode = d.write_mode;
           if (d.scope) opts.scope = d.scope;
@@ -1313,7 +1314,7 @@ export async function handleDispatchParallel(
         return {
           agentId: d.agent_id,
           task: d.task,
-          options: Object.keys(opts).length > 0 ? opts : undefined,
+          options: opts,
         };
       }),
       consensus ? { consensus: true } : undefined,
@@ -1714,10 +1715,10 @@ export async function handleDispatchConsensus(
     // attachments (vision-capable relay providers). Returns undefined when
     // neither is present so the pre-feature call shape is preserved.
     const relayOptsFor = (d: any): Record<string, unknown> | undefined => {
-      const o: Record<string, unknown> = {};
+      const o: Record<string, unknown> = { notifyOnDone: true };
       if (dispatchResolutionRoots && dispatchResolutionRoots.length > 0) o.resolutionRoots = dispatchResolutionRoots;
       if (d.images && d.images.length > 0) o.images = [...d.images];
-      return Object.keys(o).length > 0 ? o : undefined;
+      return o;
     };
     const { taskIds, errors } = precomputedLenses
       ? await ctx.mainAgent.dispatchParallelWithLenses(
