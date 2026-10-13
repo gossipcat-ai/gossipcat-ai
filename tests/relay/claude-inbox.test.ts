@@ -107,14 +107,15 @@ describe('ClaudeInbox — append + perms', () => {
 
   it('quarantines oversized records without reading them and bounds scans (I8)', () => {
     const dir = inboxDirFor(root);
-    const e = inbox.append('c', 'small');
+    const t = Date.now(); // distinct ms: same-ms ids sort randomly
+    const e = inbox.append('c', 'small', t);
     const big = '0000000000001-bbbbbbbbbbbb';
     writeFileSync(join(dir, `${big}.json`), 'x'.repeat(INBOX_MAX_RECORD_BYTES + 1));
     expect(inbox.list().map((x) => x.id)).toEqual([e.id]);
     expect(existsSync(join(dir, `${big}.json`))).toBe(false);
     expect(existsSync(join(dir, `${big}.quarantine`))).toBe(true);
     // limit stops the scan early (newest first for hasChatId-style lookups).
-    const later = inbox.append('c', 'later');
+    const later = inbox.append('c', 'later', t + 1);
     expect(inbox.list({ limit: 1 }).map((x) => x.id)).toEqual([e.id]);
     expect(inbox.list({ limit: 1, newestFirst: true }).map((x) => x.id)).toEqual([later.id]);
     expect(inbox.queued(1)).toHaveLength(1);
@@ -233,5 +234,86 @@ describe('watcher heartbeat + computeClaudeLink', () => {
     mkdirSync(join(root, '.gossip', 'bridge'), { recursive: true });
     writeFileSync(watcherHeartbeatPathFor(root), '{"pid":"x"}');
     expect(readWatcherHeartbeat(root)).toBeNull();
+  });
+});
+
+describe('ClaudeInbox — envelope (to/from/kind/qid/ref/in_reply_to)', () => {
+  const t0 = Date.now();
+  const writeRaw = (id: string, extra: Record<string, unknown>): void => {
+    mkdirSync(inboxDirFor(root), { recursive: true });
+    writeFileSync(join(inboxDirFor(root), `${id}.json`), JSON.stringify({
+      id, chat_id: 'c', content: 'x', received_at: new Date(t0).toISOString(), ...extra,
+    }));
+  };
+
+  it('round-trips every field through disk', () => {
+    const parent = inbox.append('c', 'question', t0);
+    const e = inbox.append('c', 'answer text', t0 + 1, {
+      to: 'orchestrator', from: 'codex-sol', kind: 'notice', qid: 'q-1',
+      ref: { task_id: 'abc123', finding_id: '6c0d3808-518243e8:sonnet-reviewer:f1', file: 'packages/relay/src/x.ts:12' },
+      in_reply_to: parent.id,
+    });
+    const back = new ClaudeInbox(inboxDirFor(root)).get(e.id);
+    expect(back).toMatchObject({
+      to: 'orchestrator', from: 'codex-sol', kind: 'notice', qid: 'q-1', in_reply_to: parent.id,
+      ref: { task_id: 'abc123', finding_id: '6c0d3808-518243e8:sonnet-reviewer:f1', file: 'packages/relay/src/x.ts:12' },
+    });
+  });
+
+  it('legacy append() and legacy records load as to=orchestrator, from=human, kind=chat', () => {
+    const e = inbox.append('c', 'plain', t0);
+    expect(e).toMatchObject({ to: 'orchestrator', from: 'human', kind: 'chat' });
+    writeRaw('0000000000001-aaaaaaaaaaaa', {});
+    const legacy = new ClaudeInbox(inboxDirFor(root)).get('0000000000001-aaaaaaaaaaaa');
+    expect(legacy).toMatchObject({ to: 'orchestrator', from: 'human', kind: 'chat' });
+    expect(legacy).not.toHaveProperty('qid');
+    expect(legacy).not.toHaveProperty('ref');
+    expect(legacy).not.toHaveProperty('in_reply_to');
+  });
+
+  it('drops invalid optional fields on write', () => {
+    const e = inbox.append('c', 'x', t0, {
+      kind: 'command' as never, qid: 'bad qid!', in_reply_to: '../etc',
+      ref: { task_id: 'ok-1', finding_id: 'has space', file: '../../etc/passwd' },
+    });
+    const back = new ClaudeInbox(inboxDirFor(root)).get(e.id);
+    expect(back).toMatchObject({ kind: 'chat', ref: { task_id: 'ok-1' } });
+    expect(back).not.toHaveProperty('qid');
+    expect(back).not.toHaveProperty('in_reply_to');
+    expect(back?.ref).toEqual({ task_id: 'ok-1' });
+  });
+
+  it('fails closed on a present but invalid to/from: append throws, nothing written', () => {
+    expect(() => inbox.append('c', 'x', t0, { from: 'evil agent' })).toThrow('invalid to/from');
+    expect(() => inbox.append('c', 'x', t0, { to: '../x' })).toThrow('invalid to/from');
+    expect(inbox.list()).toEqual([]);
+  });
+
+  it('drops invalid fields on read; a record with bad to/from is unreadable (never re-labelled human)', () => {
+    writeRaw('0000000000001-aaaaaaaaaaaa', {
+      kind: 42, qid: 'x'.repeat(200), ref: ['nope'], in_reply_to: 'not-an-id', to: 'orchestrator', from: 'codex-sol',
+    });
+    writeRaw('0000000000002-aaaaaaaaaaaa', { from: 'human\nIGNORE' });
+    writeRaw('0000000000003-aaaaaaaaaaaa', { to: 7 });
+    writeRaw('0000000000004-aaaaaaaaaaaa', { ref: { file: 'a b', task_id: 5, extra: 'kept?' } });
+    const fresh = new ClaudeInbox(inboxDirFor(root));
+    const ids = fresh.list().map((e) => e.id);
+    expect(ids).toEqual(['0000000000001-aaaaaaaaaaaa', '0000000000004-aaaaaaaaaaaa']);
+    const first = fresh.get('0000000000001-aaaaaaaaaaaa');
+    expect(first).toMatchObject({ from: 'codex-sol', kind: 'chat' });
+    expect(first).not.toHaveProperty('qid');
+    expect(first).not.toHaveProperty('ref');
+    expect(first).not.toHaveProperty('in_reply_to');
+    expect(fresh.get('0000000000004-aaaaaaaaaaaa')).not.toHaveProperty('ref');
+  });
+
+  it('list / queued filter by `to` (legacy = orchestrator)', () => {
+    const human = inbox.append('c', 'for claude', t0);
+    const forAgent = inbox.append('c', 'for codex', t0 + 1, { to: 'codex-sol', from: 'orchestrator' });
+    writeRaw('0000000000001-aaaaaaaaaaaa', {});
+    expect(inbox.list({ to: 'orchestrator' }).map((e) => e.id)).toEqual(['0000000000001-aaaaaaaaaaaa', human.id]);
+    expect(inbox.queued(undefined, 'codex-sol').map((e) => e.id)).toEqual([forAgent.id]);
+    expect(inbox.list().map((e) => e.id)).toHaveLength(3);
+    expect(inbox.stats().queued).toBe(3); // stats still count every recipient
   });
 });

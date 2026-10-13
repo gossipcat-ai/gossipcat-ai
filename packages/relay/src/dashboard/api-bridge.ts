@@ -32,7 +32,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { MirrorEventStore, MIRROR_RING_MAX, MIRROR_RING_TTL_MS } from './api-mirror-events';
 import { FileChatStore, NullChatStore } from './chat-store';
-import { ClaudeInbox, InboxFullError, inboxDirFor } from './claude-inbox';
+import { ClaudeInbox, InboxFullError, inboxDirFor, type InboxEnvelope } from './claude-inbox';
 import { computeClaudeLink } from './claude-inbox-watcher';
 import { outboxDirFor, ReplyOutbox } from './bridge-reply-outbox';
 
@@ -477,7 +477,7 @@ export class BridgeHub {
     // Durable inbox FIRST: persisted before any delivery attempt so a dropped
     // channel notification (plain `claude --resume`, no --channels) or a missing
     // sink can never lose the message.
-    const persisted = this.persistInbound(chatId, message);
+    const persisted = this.persistInbound(chatId, message, { to: 'orchestrator', from: 'human', kind: 'chat' });
     if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
     const inboxId = persisted ? persisted.id : null;
 
@@ -513,11 +513,14 @@ export class BridgeHub {
     }
   }
 
-  /** Persist to the durable inbox; null when disabled or the write failed. */
-  private persistInbound(chatId: string, text: string): PersistResult {
+  /**
+   * Persist to the durable inbox; null when disabled or the write failed. The
+   * envelope (incl. `from`) is stamped here in code, never parsed from `text`.
+   */
+  private persistInbound(chatId: string, text: string, envelope: InboxEnvelope): PersistResult {
     if (!this.inbox) return null;
     try {
-      return { id: this.inbox.append(chatId, text).id };
+      return { id: this.inbox.append(chatId, text, Date.now(), envelope).id };
     } catch (e) {
       return e instanceof InboxFullError ? { full: e.unanswered } : null;
     }
@@ -805,8 +808,10 @@ export class BridgeHub {
       return { status: 503, payload: { error: 'No live Claude Code bridge session is active' } };
     }
 
+    // The `[answer qid=…]` prefix stays for backward compat; the structured
+    // kind/qid envelope fields are the source of truth.
     const turn = `[answer qid=${qid}] ${parts.join(' · ')}`;
-    const persisted = this.persistInbound(chatId, turn);
+    const persisted = this.persistInbound(chatId, turn, { to: 'orchestrator', from: 'human', kind: 'answer', qid });
     if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
     const inboxId = persisted ? persisted.id : null;
     const delivered = this.callSink(chatId, turn, inboxId);
