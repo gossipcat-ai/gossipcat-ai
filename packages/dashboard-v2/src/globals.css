@@ -1417,3 +1417,10 @@ html[data-theme="dark"]::after {
 .agent-working-row:hover {
   background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
+
+/* Shared conversation: prose first, references and transport details secondary. */
+.shared-chat-turn { max-width: 720px; margin-left: auto; margin-right: auto; }
+.shared-message-prose, .shared-request { font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; }
+.shared-message-prose .cx-prose { margin-bottom: 0; }
+.shared-message-prose .cx-prose code.md-inline-code { font-size: 12px; }
+.shared-chat-turn summary { list-style-position: outside; margin-left: 14px; }

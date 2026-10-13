@@ -84,6 +84,8 @@ type TrackedTask = TaskEntry & {
      * with image attachments. Relay tasks do not resume after reconnect.
      */
     images?: string[];
+    /** Set once the externally-stopped terminal record was persisted (runTask). */
+    stopRecorded?: boolean;
 };
 
 /**
@@ -276,6 +278,7 @@ export class DispatchPipeline {
       log(`❌ dispatch FAILED: agent "${agentId}" not found. Available: [${[...this.workers.keys()].join(', ')}]`);
       throw new Error(`Agent "${agentId}" not found`);
     }
+    worker.validateDispatch?.(options);
     log(`→ dispatch → ${agentId}: "${task.slice(0, 80)}..." writeMode=${options?.writeMode || 'default'}`);
 
     // Scoped write mode: validate scope and check for overlaps
@@ -545,6 +548,10 @@ export class DispatchPipeline {
       const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
+        // Cancelled/timed out externally (cancelRunningTasks / collect): resource
+        // cleanup already ran there. Stop consuming without resurrecting the
+        // task and settle with the real reason, not the generic stream error.
+        if (entry.status !== 'running') throw this.settleExternallyStopped(entry);
         entry.lastEventAt = Date.now();
         switch (event.type) {
           case TaskStreamEventType.PROGRESS:
@@ -650,6 +657,7 @@ export class DispatchPipeline {
             break;
         }
       }
+      if (entry.status !== 'running') throw this.settleExternallyStopped(entry);
       throw new Error('Task stream ended without a final result or error.');
     };
 
@@ -704,6 +712,33 @@ export class DispatchPipeline {
    * own task_completed check is the correctness backstop for whatever slips
    * through.
    */
+  /**
+   * Terminal bookkeeping for a task whose status was flipped away from
+   * 'running' by cancelRunningTasks() or a collect timeout while its stream
+   * was still live. Those paths already released scope/worktree/roots, so this
+   * only persists one `task.cancelled` record and prunes relay-tasks.json.
+   * No completion signals are emitted (the task produced no result, and
+   * collect.ts owns timeout signalling) — so nothing is double-recorded.
+   * Idempotent via `stopRecorded`.
+   */
+  private settleExternallyStopped(entry: TrackedTask): Error {
+    const reason = entry.error || 'Task stopped';
+    if (!entry.stopRecorded) {
+      entry.stopRecorded = true;
+      try {
+        const duration = (entry.completedAt ?? Date.now()) - entry.startedAt;
+        log(`⏹ relay ← ${entry.agentId} [${entry.id}] stopped (${(duration / 1000).toFixed(1)}s) — ${reason}`);
+        const taskGraphPath = join(this.projectRoot, '.gossip', 'task-graph.jsonl');
+        rotateJsonlIfNeeded(taskGraphPath);
+        appendFileSync(taskGraphPath, JSON.stringify({
+          type: 'task.cancelled', taskId: entry.id, reason, duration, timestamp: new Date().toISOString(),
+        }) + '\n');
+      } catch { /* best-effort visibility */ }
+      this.pruneRelayTaskRecord(entry.id);
+    }
+    return new Error(reason);
+  }
+
   private pruneRelayTaskRecord(taskId: string): void {
     try {
       const relayTasksPath = join(this.projectRoot, '.gossip', 'relay-tasks.json');
@@ -768,6 +803,7 @@ export class DispatchPipeline {
       if (task.status === 'running') {
         task.status = 'failed';
         task.error = 'Cancelled by user';
+        this.workers.get(task.agentId)?.cancelTask?.(task.id, task.error);
         task.completedAt = Date.now();
         // Release resources held by cancelled tasks
         if (task.writeMode === 'scoped') {
@@ -956,6 +992,7 @@ export class DispatchPipeline {
       if (t.status === 'running') {
         t.status = 'failed';
         t.error = 'collect timeout';
+        this.workers.get(t.agentId)?.cancelTask?.(t.id, t.error);
         t.completedAt = Date.now();
         // Fix 5: release scope for timed-out scoped tasks (prevents permanent scope leak)
         if (t.writeMode === 'scoped') {

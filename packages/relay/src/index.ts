@@ -8,4 +8,5 @@ export { SubscriptionManager } from './subscription-manager';
 export { PresenceTracker } from './presence';
 export { DashboardAuth, DashboardRouter, DashboardWs, emitDashboardEvent, validateAskQuestions } from './dashboard';
 export type { DashboardEvent, DashboardEventEntry, AskQuestion, AskOption } from './dashboard';
+export { codexChatHistory, sendCodexChat } from './dashboard/api-codex-chat';
 export { recordMemoryQueryAttribution, hasMemoryQuery, MEMORY_QUERY_TOOLS, sweepExpiredAgents } from './memory-query-buffer';
