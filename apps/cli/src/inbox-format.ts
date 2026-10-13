@@ -20,10 +20,12 @@
  * `inbox wait` processes, the SessionStart hook, the UserPromptSubmit hook)
  * because each consumer first creates the `delivered` marker with O_EXCL and
  * only renders the entries whose marker IT created. Claim-then-print can still
- * lose output (process killed between the two), so the hooks RE-SURFACE
- * delivered-but-unanswered messages after UNANSWERED_GRACE_MS (at most once per
- * grace period, tracked by the `reminded` file) until `gossip_chat_reply` or
- * `inbox ack --answered` closes them. Duplicates are acceptable; losses are not.
+ * lose output (process killed between the two), so the hooks AND the idle
+ * watcher (`inbox wait`) RE-SURFACE delivered-but-unanswered messages after
+ * UNANSWERED_GRACE_MS (at most once per grace period across all consumers —
+ * the `reminded` marker is claimed race-free, ClaudeInbox.claimReminder) until
+ * `gossip_chat_reply` or `inbox ack --answered` closes them, and at most
+ * INBOX_MAX_REMINDERS times. Duplicates are acceptable; losses are not.
  */
 import { existsSync, statSync } from 'fs';
 import { dirname, join, resolve } from 'path';
@@ -127,9 +129,23 @@ function renderBlocks(blocks: readonly FencedBlock[], opts: { remaining?: number
   return lines.join('\n').trimEnd() + '\n';
 }
 
-/** Render a batch (wait / hooks). */
-export function renderBatch(entries: InboxEntry[], opts: { maxChars?: number; remaining?: number; footer?: string } = {}): string {
-  return renderBlocks(entries.map((e) => ({ text: fenceMessage(e, opts.maxChars), agent: isAgentMail(e) })), opts);
+/**
+ * Render a batch (wait / hooks). Ids in `resurfaced` are labelled as
+ * unanswered reminders.
+ */
+export function renderBatch(
+  entries: InboxEntry[],
+  opts: { maxChars?: number; remaining?: number; footer?: string; resurfaced?: ReadonlySet<string> } = {},
+): string {
+  return renderBlocks(entries.map((e) => ({
+    text: fenceMessage(e, opts.maxChars, opts.resurfaced?.has(e.id) ? UNANSWERED_LABEL : undefined),
+    agent: isAgentMail(e),
+  })), opts);
+}
+
+/** Consumer id recorded on delivered markers: `wait:<pid>` / `hook:<pid>`. */
+function consumerFor(via: string): string {
+  return `${via}:${process.pid}`;
 }
 
 /**
@@ -143,7 +159,7 @@ export function claimQueued(inbox: ClaudeInbox, max: number, via: string): { cla
   let skipped = 0;
   for (const e of queued) {
     if (claimed.length >= max) { skipped++; continue; }
-    if (inbox.mark(e.id, 'delivered', via)) claimed.push({ ...e, status: 'delivered', delivered_via: via });
+    if (inbox.mark(e.id, 'delivered', via, consumerFor(via))) claimed.push({ ...e, status: 'delivered', delivered_via: via });
   }
   return { claimed, remaining: skipped };
 }
@@ -184,8 +200,10 @@ export const HOOK_MAX_CHARS = 2000;
 const HOOK_SCAN_LIMIT = 25;
 /** Hard cap on the WHOLE hook injection (preamble, headers, notes, footer). */
 export const HOOK_MAX_TOTAL_CHARS = 12_000;
-/** Delivered-but-unanswered messages older than this are re-surfaced by hooks. */
+/** Delivered-but-unanswered messages older than this are re-surfaced by hooks and the watcher. */
 export const UNANSWERED_GRACE_MS = 10 * 60 * 1000;
+/** After this many reminders a message is no longer re-surfaced automatically (`inbox list` still shows it). */
+export const INBOX_MAX_REMINDERS = 6;
 /**
  * Confirmed channel mode: a fresh queued message most likely also arrived as a
  * channel turn, so hooks leave it alone this long (a `gossip_chat_reply` closes it); after
@@ -195,6 +213,47 @@ export const CHANNEL_GRACE_MS = 2 * 60 * 1000;
 
 const UNANSWERED_LABEL =
   '[unanswered — shown to Claude earlier but no `gossip_chat_reply` yet; answer it now, or close it with `gossipcat inbox ack <id> --answered`]';
+
+function ageOf(iso: string | undefined, now: number): number {
+  return iso ? now - Date.parse(iso) : Infinity;
+}
+
+/** True when a reminder state allows another reminder now. */
+function reminderDue(state: { at?: string; count: number }, now: number): boolean {
+  return state.count < INBOX_MAX_REMINDERS && ageOf(state.at, now) > UNANSWERED_GRACE_MS;
+}
+
+/**
+ * Delivered-but-unanswered orchestrator mail due for a reminder (oldest
+ * first, at most `limit`): delivered (and last reminded) more than
+ * UNANSWERED_GRACE_MS ago, fewer than INBOX_MAX_REMINDERS reminders, and — in
+ * confirmed channel mode — received more than CHANNEL_GRACE_MS ago. Reads are
+ * capped by the store's INBOX_SCAN_MAX.
+ */
+export function dueUnanswered(inbox: ClaudeInbox, opts: { now: number; channel?: boolean; limit: number }): InboxEntry[] {
+  const { now } = opts;
+  return inbox.list({
+    status: ['delivered'], to: CLAUDE_INBOX_ADDRESS, limit: opts.limit,
+    where: (e) => ageOf(e.delivered_at ?? e.received_at, now) > UNANSWERED_GRACE_MS
+      && reminderDue({ at: e.reminded_at, count: e.reminded_count ?? 0 }, now)
+      && (!opts.channel || ageOf(e.received_at, now) > CHANNEL_GRACE_MS),
+  });
+}
+
+/** Claim the next reminder of `e` (race-free across hooks and watchers). */
+function claimReminder(inbox: ClaudeInbox, e: InboxEntry, now: number): boolean {
+  return inbox.claimReminder(e.id, now, (state) => reminderDue(state, now)) !== null;
+}
+
+/**
+ * Watcher idle recovery: claim reminders for up to `max` due unanswered
+ * messages (see dueUnanswered). Returns the entries this call claimed.
+ */
+export function claimUnanswered(inbox: ClaudeInbox, max: number, opts: { now?: number; channel?: boolean } = {}): InboxEntry[] {
+  const now = opts.now ?? Date.now();
+  if (max <= 0) return [];
+  return dueUnanswered(inbox, { now, channel: opts.channel, limit: max }).filter((e) => claimReminder(inbox, e, now));
+}
 
 /**
  * Hook claim within a total output budget. Candidates: queued messages (oldest
@@ -208,13 +267,11 @@ export function claimForHook(
   opts: { footer?: string; channel?: boolean; now?: number } = {},
 ): { text: string; count: number } {
   const now = opts.now ?? Date.now();
-  const age = (iso: string | undefined): number => (iso ? now - Date.parse(iso) : Infinity);
   // Bounded reads: a hook is a fresh process every prompt, so scan only a
   // window of candidates; the "N more" line counts the rest from file names.
   const scanned = inbox.queued(HOOK_SCAN_LIMIT, CLAUDE_INBOX_ADDRESS);
-  const queued = scanned.filter((e) => !opts.channel || age(e.received_at) > CHANNEL_GRACE_MS);
-  const unanswered = inbox.list({ status: ['delivered'], limit: HOOK_SCAN_LIMIT, to: CLAUDE_INBOX_ADDRESS }).filter((e) =>
-    age(e.delivered_at ?? e.received_at) > UNANSWERED_GRACE_MS && age(e.reminded_at) > UNANSWERED_GRACE_MS);
+  const queued = scanned.filter((e) => !opts.channel || ageOf(e.received_at, now) > CHANNEL_GRACE_MS);
+  const unanswered = dueUnanswered(inbox, { now, channel: opts.channel, limit: HOOK_SCAN_LIMIT });
   // Count only orchestrator-addressed queued mail (agent-addressed mail waits
   // for a dispatch). A short window already holds all of it; otherwise the
   // to-filtered recount reads queued records only, capped at INBOX_SCAN_MAX.
@@ -231,8 +288,8 @@ export function claimForHook(
     if (blocks.length >= HOOK_MAX_MESSAGES) { skipped++; continue; }
     const block = fenceMessage(e, HOOK_MAX_CHARS, re ? UNANSWERED_LABEL : undefined);
     if (used + block.length + 2 > HOOK_MAX_TOTAL_CHARS) { skipped++; continue; }
-    if (re) inbox.markReminded(e.id, now);
-    else if (!inbox.mark(e.id, 'delivered', 'hook')) continue; // another consumer won
+    if (re) { if (!claimReminder(inbox, e, now)) continue; } // another consumer reminded it
+    else if (!inbox.mark(e.id, 'delivered', 'hook', consumerFor('hook'))) continue; // another consumer won
     blocks.push({ text: block, agent: isAgentMail(e) });
     used += block.length + 2;
   }

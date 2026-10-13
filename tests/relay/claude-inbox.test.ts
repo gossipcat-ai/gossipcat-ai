@@ -12,7 +12,7 @@ import {
 } from '@gossip/relay/dashboard/claude-inbox';
 import {
   clearWatcherHeartbeat, computeClaudeLink, isWatcherListening, readWatcherHeartbeat, writeWatcherHeartbeat,
-  watcherExitPathFor, watcherHeartbeatPathFor, WATCHER_FRESH_MS, WATCHER_RECENT_MS,
+  watcherConsumerPathFor, watcherExitPathFor, watcherHeartbeatPathFor, watchersDirFor, WATCHER_FRESH_MS, WATCHER_RECENT_MS,
 } from '@gossip/relay/dashboard/claude-inbox-watcher';
 
 let root: string;
@@ -203,7 +203,8 @@ describe('watcher heartbeat + computeClaudeLink', () => {
 
     const now = Date.now();
     writeWatcherHeartbeat(root, now);
-    expect(mode(watcherHeartbeatPathFor(root))).toBe(0o600);
+    expect(mode(watcherConsumerPathFor(root))).toBe(0o600);
+    expect(mode(watchersDirFor(root))).toBe(0o700);
     expect(readWatcherHeartbeat(root)?.pid).toBe(process.pid);
     expect(isWatcherListening(root, now)).toBe(true);
     expect(computeClaudeLink({ hasSink: false, channelConfirmed: false, projectRoot: root, now }).state).toBe('listening');
@@ -216,7 +217,7 @@ describe('watcher heartbeat + computeClaudeLink', () => {
     const now = Date.now();
     writeWatcherHeartbeat(root, now);
     clearWatcherHeartbeat(root, 0, now + 1000);
-    expect(existsSync(watcherHeartbeatPathFor(root))).toBe(false); // can never read as live
+    expect(existsSync(watcherConsumerPathFor(root))).toBe(false); // can never read as live
     expect(mode(watcherExitPathFor(root))).toBe(0o600);
     const link = computeClaudeLink({ hasSink: true, channelConfirmed: false, projectRoot: root, now: now + 5000 });
     expect(link).toMatchObject({ state: 'recent', last_exit: new Date(now + 1000).toISOString() });

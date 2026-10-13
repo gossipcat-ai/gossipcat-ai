@@ -9,9 +9,12 @@
  *   <id>.json        immutable record {id, chat_id, content, received_at,
  *                    to, from, kind, qid?, ref?, in_reply_to?} (envelope:
  *                    claude-inbox-envelope.ts; legacy records lack it)
- *   <id>.delivered   marker {at, via}: shown to Claude (inbox wait / hook / ack)
- *   <id>.answered    marker: the MCP `gossip_chat_reply` tool answered this chat_id
- *   <id>.reminded    {at}: last time a hook re-surfaced it as unanswered
+ *   <id>.delivered   marker {at, via, consumer?}: shown to Claude (inbox wait /
+ *                    hook / ack); consumer = 'wait:<pid>' | 'hook:<pid>' (newer markers)
+ *   <id>.answered    marker {at, via}: the MCP `gossip_chat_reply` tool answered this
+ *                    chat_id — or via 'expired': agent mail past its TTL (claude-inbox-prune.ts)
+ *   <id>.reminded    {at, count}: last time a hook / the watcher re-surfaced it as
+ *                    unanswered, and how often (legacy markers lack count = 1)
  *   <id>.quarantine  an oversized record moved aside (never read)
  *
  * Concurrency: records are written once (tmp + rename); status transitions are
@@ -25,14 +28,17 @@
  * most INBOX_SCAN_MAX records.
  */
 
-import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
 import { atomicWrite0600, isCanonicalIso, readJsonBounded } from './claude-inbox-io';
-import { planPrune, readPruneLog, recordPrune, type PruneLog } from './claude-inbox-prune';
+import {
+  AGENT_MAIL_TTL_MS, isExpirableMail, planExpiryCandidates, planPrune, readPruneLog, recordPrune, type PruneLog,
+} from './claude-inbox-prune';
 import { resolveEnvelope, type InboxEnvelope, type ResolvedEnvelope } from './claude-inbox-envelope';
 
 export { atomicWrite0600 } from './claude-inbox-io';
+export { AGENT_MAIL_TTL_MS } from './claude-inbox-prune';
 export {
   DEFAULT_FROM, DEFAULT_KIND, DEFAULT_TO, INBOX_PARTY_RE,
   type InboxEnvelope, type InboxKind, type InboxRef,
@@ -50,8 +56,20 @@ export interface InboxEntry extends ResolvedEnvelope {
   delivered_via?: string;
   /** When it was marked delivered, when known. */
   delivered_at?: string;
-  /** When a hook last re-surfaced it as unanswered, when known. */
+  /** Which consumer claimed it ('wait:<pid>' | 'hook:<pid>'), when recorded. */
+  delivered_consumer?: string;
+  /** When a hook / the watcher last re-surfaced it as unanswered, when known. */
   reminded_at?: string;
+  /** How many times it was re-surfaced (present when a reminder marker exists). */
+  reminded_count?: number;
+  /** Who closed it ('reply' | 'ack' | 'expired' | 'dispatch:<task_id>'), when status is answered and known. */
+  answered_via?: string;
+}
+
+/** Reminder bookkeeping of one message ({} count 0 = never reminded). */
+export interface ReminderState {
+  at?: string;
+  count: number;
 }
 
 interface StoredRecord extends ResolvedEnvelope {
@@ -71,6 +89,8 @@ export interface InboxListOpts {
   limit?: number;
   /** Scan newest → oldest (result is still returned oldest first). */
   newestFirst?: boolean;
+  /** Only entries this predicate accepts (applied before `limit`; reads stay capped by INBOX_SCAN_MAX). */
+  where?: (e: InboxEntry) => boolean;
 }
 
 export interface InboxStats {
@@ -106,8 +126,11 @@ const MARKERS = ['delivered', 'answered'] as const;
 type Marker = (typeof MARKERS)[number];
 const AUX_SUFFIXES = ['delivered', 'answered', 'reminded'] as const;
 const SMALL_FILE_BYTES = 4096;
-/** `wait` | `hook` | `ack` | `reply`, or `dispatch:<task_id>` for agent mail injected into a prompt. */
+/** `wait` | `hook` | `ack` | `reply` | `expired`, or `dispatch:<task_id>` for agent mail injected into a prompt. */
 const DELIVERED_VIA_RE = /^[a-z]{1,16}(?::[A-Za-z0-9_-]{1,64})?$/;
+/** Claiming consumer recorded on a delivered marker: `wait:<pid>` | `hook:<pid>`. */
+export const INBOX_CONSUMER_RE = /^(?:wait|hook):\d{1,10}$/;
+const MAX_REMINDER_COUNT = 1_000_000;
 
 /** Canonical inbox dir for a project root. */
 export function inboxDirFor(projectRoot: string): string {
@@ -157,13 +180,16 @@ export class ClaudeInbox {
   /**
    * Create a status marker. Returns true when this call made the transition,
    * false when the marker already existed or the record is unknown. O_EXCL
-   * makes concurrent markers race-free (exactly one creator wins).
+   * makes concurrent markers race-free (exactly one creator wins). `consumer`
+   * (`wait:<pid>` / `hook:<pid>`) is recorded when valid, dropped otherwise.
    */
-  mark(id: string, marker: Marker, via: string = marker): boolean {
+  mark(id: string, marker: Marker, via: string = marker, consumer?: string): boolean {
     if (!INBOX_ID_RE.test(id)) return false;
     if (!existsSync(join(this.dir, `${id}.json`))) return false;
+    const body: Record<string, string> = { at: new Date().toISOString(), via };
+    if (consumer !== undefined && INBOX_CONSUMER_RE.test(consumer)) body['consumer'] = consumer;
     try {
-      writeFileSync(join(this.dir, `${id}.${marker}`), JSON.stringify({ at: new Date().toISOString(), via }), {
+      writeFileSync(join(this.dir, `${id}.${marker}`), JSON.stringify(body), {
         encoding: 'utf-8', mode: 0o600, flag: 'wx',
       });
       return true;
@@ -172,10 +198,46 @@ export class ClaudeInbox {
     }
   }
 
-  /** Record that a hook re-surfaced an unanswered message (overwrites; throttle only). */
-  markReminded(id: string, now: number = Date.now()): void {
-    if (!INBOX_ID_RE.test(id) || !existsSync(join(this.dir, `${id}.json`))) return;
-    try { atomicWrite0600(join(this.dir, `${id}.reminded`), JSON.stringify({ at: new Date(now).toISOString() })); } catch { /* best effort */ }
+  /**
+   * Claim the next reminder of an unanswered message: when `isDue(current
+   * state)` holds, advance `.reminded` to {at: now, count: count + 1} and
+   * return the new count; null when not due, unknown, or another consumer
+   * (hook / watcher) claimed this reminder first. Race-free across processes:
+   * the first reminder is an O_EXCL create, later ones rename the current
+   * marker away (only one renamer wins) and verify it was the state judged due.
+   */
+  claimReminder(id: string, now: number, isDue: (state: ReminderState) => boolean): number | null {
+    if (!INBOX_ID_RE.test(id) || !existsSync(join(this.dir, `${id}.json`))) return null;
+    const path = join(this.dir, `${id}.reminded`);
+    const prev = this.readReminder(path);
+    if (!isDue(prev)) return null;
+    const next = JSON.stringify({ at: new Date(now).toISOString(), count: Math.min(prev.count + 1, MAX_REMINDER_COUNT) });
+    if (prev.count === 0) {
+      try {
+        writeFileSync(path, next, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+        return prev.count + 1;
+      } catch {
+        return null;
+      }
+    }
+    const claimName = `${id}.reminded.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    const claim = join(this.dir, claimName);
+    try { renameSync(path, claim); } catch { return null; }
+    const taken = this.readReminder(claim);
+    if (taken.at !== prev.at || taken.count !== prev.count) {
+      // A newer reminder landed between our read and the rename: put it back.
+      try { linkSync(claim, path); } catch { /* a newer marker exists already */ }
+      this.unlinkQuiet(claimName);
+      return null;
+    }
+    try {
+      atomicWrite0600(path, next);
+    } catch {
+      try { renameSync(claim, path); } catch { /* best effort */ }
+      return null;
+    }
+    this.unlinkQuiet(claimName);
+    return prev.count + 1;
   }
 
   /**
@@ -234,12 +296,8 @@ export class ClaudeInbox {
       const rec = this.readRecord(id);
       if (!rec || (opts.chatId !== undefined && rec.chat_id !== opts.chatId)) continue;
       if (opts.to !== undefined && rec.to !== opts.to) continue;
-      const entry: InboxEntry = { ...rec, status };
-      if (status !== 'queued') Object.assign(entry, this.readDelivered(id));
-      if (present.has(`${id}.reminded`)) {
-        const at = this.readAt(`${id}.reminded`);
-        if (at) entry.reminded_at = at;
-      }
+      const entry = this.withMarkers({ ...rec, status }, (m) => present.has(`${id}.${m}`));
+      if (opts.where && !opts.where(entry)) continue;
       out.push(entry);
     }
     return opts.newestFirst ? out.reverse() : out;
@@ -255,10 +313,22 @@ export class ClaudeInbox {
     if (!rec) return null;
     const has = (m: string): boolean => existsSync(join(this.dir, `${id}.${m}`));
     const status: InboxStatus = has('answered') ? 'answered' : has('delivered') ? 'delivered' : 'queued';
-    const entry: InboxEntry = { ...rec, status };
-    if (status !== 'queued') Object.assign(entry, this.readDelivered(id));
-    const reminded = has('reminded') ? this.readAt(`${id}.reminded`) : undefined;
-    if (reminded) entry.reminded_at = reminded;
+    return this.withMarkers({ ...rec, status }, has);
+  }
+
+  /** Add delivered / answered / reminder metadata from the marker files present. */
+  private withMarkers(entry: InboxEntry, has: (marker: string) => boolean): InboxEntry {
+    const id = entry.id;
+    if (entry.status !== 'queued') Object.assign(entry, this.readDelivered(id));
+    if (entry.status === 'answered') {
+      const via = this.readMarker(`${id}.answered`).via;
+      if (via) entry.answered_via = via;
+    }
+    if (has('reminded')) {
+      const r = this.readReminder(join(this.dir, `${id}.reminded`));
+      if (r.at) entry.reminded_at = r.at;
+      entry.reminded_count = Math.max(r.count, 1);
+    }
     return entry;
   }
 
@@ -293,10 +363,12 @@ export class ClaudeInbox {
   }
 
   /**
-   * Age out ANSWERED records past retention and cap the answered count. Never
-   * deletes a queued or delivered-unanswered record (claude-inbox-prune.ts).
-   * Also reaps orphaned markers, stale tmp files and old quarantined records.
-   * Returns how many records were removed (persisted to inbox-prune.json).
+   * Close agent mail unanswered past AGENT_MAIL_TTL_MS (answered via 'expired'),
+   * then age out ANSWERED records past retention and cap the answered count.
+   * Never deletes a queued or delivered-unanswered record and never expires
+   * human mail (claude-inbox-prune.ts). Also reaps orphaned markers, stale tmp
+   * files and old quarantined records. Returns how many records were removed;
+   * removals and expiries are persisted to inbox-prune.json.
    */
   prune(now: number = Date.now()): number {
     let names: string[];
@@ -305,13 +377,28 @@ export class ClaudeInbox {
     } catch {
       return 0;
     }
+    const expired = this.expireAgentMail(names, now);
+    for (const id of expired) names.push(`${id}.answered`);
     const plan = planPrune(names, now, {
       idRe: INBOX_ID_RE, aux: AUX_SUFFIXES, retentionMs: INBOX_RETENTION_MS, maxAnswered: INBOX_MAX_ENTRIES,
     });
     for (const id of plan.drop) this.remove(id);
     for (const n of plan.unlink) this.unlinkQuiet(n);
-    if (plan.drop.size > 0) this.lastPrune = recordPrune(this.dir, plan.drop.size, now);
+    if (plan.drop.size > 0 || expired.length > 0) {
+      this.lastPrune = recordPrune(this.dir, { removed: plan.drop.size, expired: expired.length }, now);
+    }
     return plan.drop.size;
+  }
+
+  /** Mark expirable mail past its TTL answered(via 'expired'). Reads at most INBOX_SCAN_MAX records. */
+  private expireAgentMail(names: readonly string[], now: number): string[] {
+    const candidates = planExpiryCandidates(names, now, { idRe: INBOX_ID_RE, ttlMs: AGENT_MAIL_TTL_MS, max: INBOX_SCAN_MAX });
+    const out: string[] = [];
+    for (const id of candidates) {
+      const rec = this.readRecord(id);
+      if (rec && isExpirableMail(rec) && this.mark(id, 'answered', 'expired')) out.push(id);
+    }
+    return out;
   }
 
   private remove(id: string): void {
@@ -347,20 +434,35 @@ export class ClaudeInbox {
     return rec;
   }
 
-  private readDelivered(id: string): Pick<InboxEntry, 'delivered_via' | 'delivered_at'> {
-    const r = readJsonBounded(join(this.dir, `${id}.delivered`), SMALL_FILE_BYTES);
-    if (!r || r === 'oversized') return {};
-    const v = r.value as { via?: unknown; at?: unknown } | null;
-    const out: Pick<InboxEntry, 'delivered_via' | 'delivered_at'> = {};
-    if (v && typeof v.via === 'string' && DELIVERED_VIA_RE.test(v.via)) out.delivered_via = v.via;
-    if (v && isCanonicalIso(v.at)) out.delivered_at = v.at;
+  private readDelivered(id: string): Pick<InboxEntry, 'delivered_via' | 'delivered_at' | 'delivered_consumer'> {
+    const m = this.readMarker(`${id}.delivered`);
+    const out: Pick<InboxEntry, 'delivered_via' | 'delivered_at' | 'delivered_consumer'> = {};
+    if (m.via) out.delivered_via = m.via;
+    if (m.at) out.delivered_at = m.at;
+    if (m.consumer) out.delivered_consumer = m.consumer;
     return out;
   }
 
-  private readAt(name: string): string | undefined {
+  /** Validated {at, via, consumer} of a marker file; invalid / missing fields are omitted. */
+  private readMarker(name: string): { at?: string; via?: string; consumer?: string } {
     const r = readJsonBounded(join(this.dir, name), SMALL_FILE_BYTES);
-    if (!r || r === 'oversized') return undefined;
-    const v = r.value as { at?: unknown } | null;
-    return v && isCanonicalIso(v.at) ? v.at : undefined;
+    if (!r || r === 'oversized') return {};
+    const v = r.value as { via?: unknown; at?: unknown; consumer?: unknown } | null;
+    const out: { at?: string; via?: string; consumer?: string } = {};
+    if (v && typeof v.via === 'string' && DELIVERED_VIA_RE.test(v.via)) out.via = v.via;
+    if (v && isCanonicalIso(v.at)) out.at = v.at;
+    if (v && typeof v.consumer === 'string' && INBOX_CONSUMER_RE.test(v.consumer)) out.consumer = v.consumer;
+    return out;
+  }
+
+  /** Reminder state at `path`: count 0 when absent; a marker without a valid count counts as 1. */
+  private readReminder(path: string): ReminderState {
+    const r = readJsonBounded(path, SMALL_FILE_BYTES);
+    if (r === null) return existsSync(path) ? { count: 1 } : { count: 0 };
+    if (r === 'oversized') return { count: 1 };
+    const v = r.value as { at?: unknown; count?: unknown } | null;
+    const c = v?.count;
+    const count = typeof c === 'number' && Number.isSafeInteger(c) && c >= 1 ? Math.min(c, MAX_REMINDER_COUNT) : 1;
+    return v && isCanonicalIso(v.at) ? { at: v.at, count } : { count };
   }
 }

@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ClaudeInbox, inboxDirFor } from '@gossip/relay/dashboard/claude-inbox';
-import { watcherHeartbeatPathFor } from '@gossip/relay/dashboard/claude-inbox-watcher';
+import { watcherConsumerPathFor } from '@gossip/relay/dashboard/claude-inbox-watcher';
 import { runInboxCommand } from '../../apps/cli/src/inbox-command';
 import {
   CHANNEL_GRACE_MS, claimQueued, fenceMessage, findProjectRoot, headerSafe, HOOK_MAX_TOTAL_CHARS,
@@ -47,7 +47,7 @@ describe('inbox wait', () => {
     expect(text).not.toMatch(/`reply`/); // the removed tool name must never be suggested
     expect(text).toContain('gossipcat inbox wait');
     expect(inbox.get(e.id)).toMatchObject({ status: 'delivered', delivered_via: 'wait' });
-    expect(existsSync(watcherHeartbeatPathFor(root))).toBe(false); // cleared on exit
+    expect(existsSync(watcherConsumerPathFor(root))).toBe(false); // cleared on exit
     expect(existsSync(watcherExitPathFor(root))).toBe(true); // last-exit kept for `recent`
   });
 
@@ -55,7 +55,7 @@ describe('inbox wait', () => {
     const t = io({ pollMs: 50, heartbeatMs: 20 });
     const p = runInboxCommand(['wait', '--timeout', '5'], t.io);
     await new Promise((r) => setTimeout(r, 150));
-    expect(existsSync(watcherHeartbeatPathFor(root))).toBe(true);
+    expect(existsSync(watcherConsumerPathFor(root))).toBe(true);
     inbox.append('chat-2', 'late message');
     expect(await p).toBe(0);
     expect(t.out.join('')).toContain('late message');

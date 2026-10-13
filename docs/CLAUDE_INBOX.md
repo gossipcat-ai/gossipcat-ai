@@ -20,13 +20,19 @@ relay persists every Claude-addressed message before it tries delivery:
 .gossip/bridge/inbox/            dir 0700
   <id>.json                      {id, chat_id, content, received_at, to, from, kind,
                                   qid?, ref?, in_reply_to?}  file 0600, written once
-  <id>.delivered                 marker {at, via}: wait | hook | ack | reply
-  <id>.answered                  marker: `gossip_chat_reply` closed it (via `in_reply_to`, or it was already delivered)
-  <id>.reminded                  {at}: last time a hook re-surfaced it as unanswered
+  <id>.delivered                 marker {at, via, consumer?}: wait | hook | ack | reply;
+                                  consumer = wait:<pid> | hook:<pid> (absent on older markers)
+  <id>.answered                  marker {at, via}: `gossip_chat_reply` closed it (via `in_reply_to`, or it was
+                                  already delivered); via `expired` = agent mail past its 24 h TTL
+  <id>.reminded                  {at, count}: last time a hook or the watcher re-surfaced it as
+                                  unanswered, and how often (a marker without count counts as 1)
   <id>.quarantine                an oversized record, moved aside unread
-.gossip/bridge/inbox-watcher.json        heartbeat {pid, at} while `inbox wait` is blocked
+.gossip/bridge/watchers/<pid>.json       per-watcher heartbeat {pid, at} while `inbox wait` is
+                                  blocked (dir 0700, file 0600)
+.gossip/bridge/inbox-watcher.json        legacy single heartbeat; still read for one release
 .gossip/bridge/inbox-watcher-exit.json   {pid, at, code} written when `inbox wait` exits
-.gossip/bridge/inbox-prune.json          {total, at}: how many answered records were pruned
+.gossip/bridge/inbox-prune.json          {total, at, expired_agent_mail, last_count, last_expired}:
+                                  answered records pruned, agent mail expired
 .gossip/bridge/outbox/<chat_id>.json     replies waiting for a dashboard stream
 ```
 
@@ -71,12 +77,24 @@ The session picks messages up three ways:
 
 Claiming a message and printing it are two steps, so output can be lost in
 between: the watcher may be killed, or its output may never reach Claude. So
-the SessionStart and UserPromptSubmit hooks also re-surface messages that are
-`delivered` but not `answered` more than 10 minutes after delivery. They are
-labelled `[unanswered …]`, shown at most once every 10 minutes (tracked by
-`<id>.reminded`), until a `gossip_chat_reply` closes them or
-`gossipcat inbox ack <id> --answered` closes them. A message may be shown
-twice; it is not lost.
+the SessionStart and UserPromptSubmit hooks re-surface messages that are
+`delivered` but not `answered` more than 10 minutes after delivery. So does a
+blocked `gossipcat inbox wait` (checked every 30 seconds), so a message comes
+back even while the human is idle and no hook fires. Re-surfaced messages are
+labelled `[unanswered …]` and the watcher exits 0 with them, as with new
+messages.
+
+Each message is shown at most once every 10 minutes across all consumers,
+until a `gossip_chat_reply` closes it or `gossipcat inbox ack <id> --answered`
+closes it. `<id>.reminded` tracks the time and count. A hook and a watcher
+cannot both claim the same 10-minute window: the first reminder is an
+`O_EXCL` create, and later ones rename the marker away so only one consumer
+wins.
+
+After 6 reminders a message is no longer re-surfaced automatically. It stays
+`delivered` (unanswered) on the dashboard and in `gossipcat inbox list`. In
+confirmed channel mode the watcher also leaves alone mail received less than
+2 minutes ago. A message may be shown twice; it is not lost.
 
 Other commands: `gossipcat inbox list [--json] [--queued]`, `inbox show <id>`
 (read-only), `inbox ack <id> [--answered]`. None of them start the MCP server.
@@ -120,6 +138,13 @@ Agents and the orchestrator exchange short notes through the same store.
   200-unanswered cap. Those slots stay free for dashboard messages from the
   human. Over-quota agent messages are dropped and logged; the task itself is
   not affected.
+- **TTL.** Agent → orchestrator and orchestrator → agent mail still unanswered
+  after 24 hours is closed as `answered` with `via: expired`. The prune pass
+  does this whenever it runs (on every append and when `inbox wait` starts), so
+  there are no extra timers. Expired mail no longer counts toward the quotas or
+  the 200 cap, and is no longer delivered or re-surfaced. `inbox list` shows it
+  as `expired`, and the count goes to `expired_agent_mail` in
+  `inbox-prune.json`. Dashboard messages from the human never expire.
 - **Orchestrator → agent.** `gossip_inbox_send(to, text, kind?, ref?, in_reply_to?)`
   queues a note for a configured agent. It is orchestrator-only and must never
   be added to an agent's tool allowlist. Text longer than one dispatch can carry
@@ -200,14 +225,20 @@ per-message status and a link state:
 | state | meaning | tone |
 |---|---|---|
 | `channel` | sink present and channel confirmed | ok |
-| `listening` | an `inbox wait` heartbeat is fresh (under 30s) and its pid is alive | ok |
+| `listening` | at least one `inbox wait` heartbeat is fresh (under 30s) and its pid is alive | ok |
 | `recent` | the watcher exited (or its heartbeat went stale) in the last 15 min; `last_exit` gives the time | warn |
 | `session` | MCP server up, nothing listening | warn |
 | `offline` | no sink, no watcher | idle |
 
-`gossipcat inbox wait` deletes its heartbeat when it exits, so it never shows
-as `listening` after exiting. It also writes `inbox-watcher-exit.json`, which
-is what the `recent` state is based on.
+Each watcher writes its own `watchers/<pid>.json`, so two sessions listening
+at once don't overwrite each other. The link carries `listeners`, the number
+of live watchers, whenever the relay knows the project root. Heartbeat files
+older than an hour are deleted when the relay reads them (at most 64 files per
+read).
+
+`gossipcat inbox wait` deletes its own heartbeat when it exits, so it never
+shows as `listening` after exiting. Other watchers are not affected. It also
+writes `inbox-watcher-exit.json`, which is what the `recent` state is based on.
 
 `gossip_chat_reply` can still find a chat whose message is in the inbox after an MCP or
 relay restart. With `in_reply_to` (one inbox id or an array; ids from other chats are ignored) it marks exactly those entries `answered`; without it, only that chat's already-`delivered` entries. If no dashboard stream
