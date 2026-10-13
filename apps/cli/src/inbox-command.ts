@@ -5,7 +5,7 @@
  *
  *   inbox wait [--timeout <sec>] [--max <n>]
  *       Block until ≥1 queued message exists (fs.watch + polling fallback),
- *       claim + print them fenced as UNTRUSTED data with the exact `reply`
+ *       claim + print them fenced as UNTRUSTED data with the exact `gossip_chat_reply`
  *       instruction, exit 0. Exit 2 on timeout (default 3600s; 0 = never),
  *       exit 3 if orphaned (parent died). Writes a heartbeat while blocked so
  *       the dashboard can show "listening", and a last-exit record on exit so

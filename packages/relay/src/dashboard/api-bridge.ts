@@ -14,7 +14,7 @@
  *     RelayServer.registerBridgeSink). The relay and the MCP server share one
  *     Node process (spec "#1 unknown RESOLVED"), so this is a direct callback —
  *     there is NO wire protocol / pending queue between them.
- *   - OUTBOUND (CC → dashboard): the MCP `reply` tool calls
+ *   - OUTBOUND (CC → dashboard): the MCP `gossip_chat_reply` tool calls
  *     RelayServer.emitBridgeReply → BridgeHub.emitReply, which fans out an SSE
  *     frame to every connected dashboard bridge-stream client.
  *
@@ -389,7 +389,7 @@ export class BridgeHub {
   // Used ONLY for the dashboard link state. It never marks a message
   // delivered: a sink accept just means the notification was handed to the
   // stdio transport, which CC may still drop. Messages stay `queued` until a
-  // consumer (inbox wait / hook / ack) claims them or `reply` answers the chat
+  // consumer (inbox wait / hook / ack) claims them or `gossip_chat_reply` answers the chat
   // — a duplicate is acceptable, a loss is not (docs/CLAUDE_INBOX.md).
   private channelConfirmed = false;
   // Replies emitted while no stream for their chat_id was open; flushed (once)
@@ -545,7 +545,7 @@ export class BridgeHub {
   /**
    * Inbox fields for a 202 payload. Always `queued`: a sink accept (even in
    * channel mode) is not proof Claude saw it — the message stays queued until
-   * `inbox wait` / a hook / `ack` claims it or `reply` answers the chat.
+   * `inbox wait` / a hook / `ack` claims it or `gossip_chat_reply` answers the chat.
    * `live` only says a channel notification was also attempted.
    */
   private inboxPayload(inboxId: string | null, sinkAccepted: boolean): Record<string, unknown> {
@@ -579,7 +579,7 @@ export class BridgeHub {
   }
 
   /**
-   * OUTBOUND: the MCP `reply` tool forwards CC's reply here. Binds chat_id
+   * OUTBOUND: the MCP `gossip_chat_reply` tool forwards CC's reply here. Binds chat_id
    * (consensus f5) — refuses a reply addressed to a chat the dashboard never
    * opened. When a stream for the chat_id is open the reply is written to it
    * ('delivered'); otherwise it is parked in the bounded reply outbox and
@@ -603,7 +603,7 @@ export class BridgeHub {
         return 'rejected';
       }
     }
-    // The MCP `reply` tool answered this chat → close out its inbox entries so
+    // The MCP `gossip_chat_reply` tool answered this chat → close out its inbox entries so
     // hooks / `inbox wait` never re-surface them and the dashboard shows it.
     // An empty id list (no / only-invalid in_reply_to) means "legacy reply":
     // close only already-delivered entries, never queued ones.

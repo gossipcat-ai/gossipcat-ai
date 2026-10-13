@@ -241,7 +241,7 @@ The orchestrator (Claude Code / Cursor) selects and calls these from your natura
 | `gossip_update` | Check for / apply gossipcat updates from npm |
 | `gossip_bug_feedback` | File a GitHub issue from an in-session bug report |
 | `gossip_reload` | Self-terminate so the host respawns with a fresh bundle (dev loop) |
-| _orchestrator-only_ | `gossip_relay`, `gossip_relay_cross_review`, `reply` — used internally to feed native results + the chat bridge back into the pipeline; you never call these |
+| _orchestrator-only_ | `gossip_relay`, `gossip_relay_cross_review`, `gossip_chat_reply` — used internally to feed native results + the chat bridge back into the pipeline; you never call these |
 
 ---
 

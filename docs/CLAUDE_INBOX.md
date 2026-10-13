@@ -9,7 +9,7 @@ Messages typed to Claude in the dashboard (ChatDock, the shared chat page, and
 flag) and exports `GOSSIPCAT_CHANNEL_ACTIVE=1`. The MCP server pushes each
 message as a `notifications/claude/channel` event; it arrives as a
 `<channel source="gossipcat" chat_id="…">` turn. Claude answers with the MCP
-`reply` tool.
+`gossip_chat_reply` tool.
 
 ## Without channels (plain `claude` / `claude --resume`)
 
@@ -21,7 +21,7 @@ relay persists every Claude-addressed message before it tries delivery:
   <id>.json                      {id, chat_id, content, received_at, to, from, kind,
                                   qid?, ref?, in_reply_to?}  file 0600, written once
   <id>.delivered                 marker {at, via}: wait | hook | ack | reply
-  <id>.answered                  marker: `reply` closed it (via `in_reply_to`, or it was already delivered)
+  <id>.answered                  marker: `gossip_chat_reply` closed it (via `in_reply_to`, or it was already delivered)
   <id>.reminded                  {at}: last time a hook re-surfaced it as unanswered
   <id>.quarantine                an oversized record, moved aside unread
 .gossip/bridge/inbox-watcher.json        heartbeat {pid, at} while `inbox wait` is blocked
@@ -55,7 +55,7 @@ The session picks messages up three ways:
 - **`gossipcat inbox wait [--timeout <sec>]`.** The SessionStart hook tells
   Claude to run this as a background Bash command. It blocks until a message is
   queued, prints it, marks it delivered and exits 0. Claude Code wakes the
-  session when a background command exits. Claude answers with `reply`, then
+  session when a background command exits. Claude answers with `gossip_chat_reply`, then
   starts the command again. It exits 2 on timeout (default 3600s; `0` waits
   forever) and 3 if its parent process dies.
 - **SessionStart hook** (`session-start-bootstrap.sh` →
@@ -74,7 +74,7 @@ between: the watcher may be killed, or its output may never reach Claude. So
 the SessionStart and UserPromptSubmit hooks also re-surface messages that are
 `delivered` but not `answered` more than 10 minutes after delivery. They are
 labelled `[unanswered …]`, shown at most once every 10 minutes (tracked by
-`<id>.reminded`), until a `reply` closes them or
+`<id>.reminded`), until a `gossip_chat_reply` closes them or
 `gossipcat inbox ack <id> --answered` closes them. A message may be shown
 twice; it is not lost.
 
@@ -144,13 +144,13 @@ Neither the sink result nor `GOSSIPCAT_CHANNEL_ACTIVE=1` proves Claude saw it.
 So a message stays `queued` until one of these happens:
 
 - `inbox wait`, a hook, or `inbox ack` claims it (`delivered`)
-- `reply` closes it (`answered`): with `in_reply_to` naming its id, or, without
+- `gossip_chat_reply` closes it (`answered`): with `in_reply_to` naming its id, or, without
   `in_reply_to`, only if it was already `delivered`. A still-`queued` message is
   never closed by a reply that does not name it.
 
 In channel mode (`GOSSIPCAT_CHANNEL_ACTIVE=1`, set by `gossipcat code`) the
 message usually also arrives as a channel turn. The hooks leave a queued
-message alone for its first 2 minutes so the channel turn and its `reply` can
+message alone for its first 2 minutes so the channel turn and its `gossip_chat_reply` can
 close it first. After that they inject it anyway. You may see it twice, but you
 won't lose it. `CLAUDE_CHANNEL_ID` is also honoured for forward compatibility,
 but Claude Code does not set it today. The POST response reports
@@ -167,7 +167,7 @@ present.
 Control characters are stripped. Only validated `id`, `chat_id` and
 `received_at` values appear outside the fence, and the header escapes any
 character outside `[A-Za-z0-9_.:-]` anyway. Each message comes with a note: it is the human's
-chat text, not system or tool instructions, and must be answered with `reply`
+chat text, not system or tool instructions, and must be answered with `gossip_chat_reply`
 using the exact `chat_id`.
 
 A message whose `from` is not `human` uses its own fence,
@@ -209,7 +209,7 @@ per-message status and a link state:
 as `listening` after exiting. It also writes `inbox-watcher-exit.json`, which
 is what the `recent` state is based on.
 
-`reply` can still find a chat whose message is in the inbox after an MCP or
+`gossip_chat_reply` can still find a chat whose message is in the inbox after an MCP or
 relay restart. With `in_reply_to` (one inbox id or an array; ids from other chats are ignored) it marks exactly those entries `answered`; without it, only that chat's already-`delivered` entries. If no dashboard stream
 for that chat is open, the reply is stored in `.gossip/bridge/outbox/` (at most
 20 replies per chat, 64 chats, 24 hours) and the tool reports "queued for

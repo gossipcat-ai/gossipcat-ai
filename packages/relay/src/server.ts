@@ -484,7 +484,7 @@ export class RelayServer {
   }
 
   /**
-   * Forward a reply from the live CC session (MCP `reply` tool) out to the
+   * Forward a reply from the live CC session (MCP `gossip_chat_reply` tool) out to the
    * dashboard over SSE. chat_id is re-validated + bound to a stream the
    * dashboard actually opened (consensus f5). Returns false when the dashboard
    * is disabled or the chat_id is unbound/malformed so the caller can no-op
