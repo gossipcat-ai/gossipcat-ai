@@ -1,7 +1,7 @@
 /**
  * gossip_chat_reply (renamed from `reply`) through the real MCP registration:
- * both names are listed with the same argument schema, `reply` is marked as a
- * deprecated alias, and both run the same handler.
+ * it is listed with its argument schema, the old `reply` name is gone, and the
+ * handler rejects a missing chat_id.
  */
 process.env.GOSSIPCAT_MCP_NO_MAIN = '1';
 // mcp-server-sdk.ts runs an argv shim at import time and exits on an
@@ -42,23 +42,17 @@ describe('gossip_chat_reply MCP tool', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('registers gossip_chat_reply and a deprecated reply alias with the same schema', async () => {
+  it('registers gossip_chat_reply with its schema; the old reply name is gone', async () => {
     const tools = (await client.listTools()).tools;
     const main = tools.find((t) => t.name === 'gossip_chat_reply');
-    const alias = tools.find((t) => t.name === 'reply');
     expect(main).toBeDefined();
-    expect(alias).toBeDefined();
-    const props = (t: any) => Object.keys(t.inputSchema.properties).sort();
-    expect(props(main)).toEqual(['chat_id', 'in_reply_to', 'text']);
-    expect(props(alias)).toEqual(props(main));
-    expect(alias!.description).toMatch(/DEPRECATED alias of gossip_chat_reply/);
+    expect(Object.keys((main!.inputSchema as any).properties).sort()).toEqual(['chat_id', 'in_reply_to', 'text']);
+    expect(tools.find((t) => t.name === 'reply')).toBeUndefined();
   });
 
-  it('both names run the same handler', async () => {
-    const viaNew: any = await client.callTool({ name: 'gossip_chat_reply', arguments: { chat_id: '', text: 'x' } });
-    const viaAlias: any = await client.callTool({ name: 'reply', arguments: { chat_id: '', text: 'x' } });
-    expect(viaNew.isError).toBe(true);
-    expect(textOf(viaNew)).toBe('gossip_chat_reply error: chat_id is required.');
-    expect(textOf(viaAlias)).toBe(textOf(viaNew));
+  it('rejects a missing chat_id', async () => {
+    const r: any = await client.callTool({ name: 'gossip_chat_reply', arguments: { chat_id: '', text: 'x' } });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe('gossip_chat_reply error: chat_id is required.');
   });
 });
