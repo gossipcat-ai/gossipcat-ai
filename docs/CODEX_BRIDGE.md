@@ -75,3 +75,7 @@ python3 scripts/codex-bridge-service.py uninstall
 Kod, MCP bundle ve LaunchAgent kurulmuştur; plist doğrulaması başarılıdır. Bu Codex sandbox'ından `launchctl bootstrap` çağrısı `Input/output error (5)` döndürdü ve servis yüklenmedi. Sistem kayıt sorgusu da `Cannot run while sandboxed` dedi. Normal macOS Terminal'inde `python3 scripts/codex-bridge-service.py start` çalıştırılması gerekiyor; ardından Claude Code `/mcp` bağlantısını yeniden başlatın. Servis henüz arka planda etkin değildir.
 
 124 test (7 paket), build:all, build:mcp, backend tip kontrolü ve diff kontrolü başarılı. İki gerçek GPT-6.1 Sol görevi aynı oturumu sürdürdü; tekrar gönderim ve gerçek tamamlanmış sonucun daemon yeniden başlatma sonrası aynı kalması doğrulandı. Kaynak analizi testinde gerçek dosyanın satır numaralı içeriği görev bağlamına verildi; doğrudan dosya okumadaki macOS sandbox sınırı ayrıca doğrulanmalıdır.
+
+## Claude'a giden mesajlar (kanal olmadan)
+
+Ortak sohbetten veya ChatDock'tan Claude'a yazılan mesajlar önce `.gossip/bridge/inbox/` altına kalıcı olarak kaydedilir. `gossipcat code` ile açılan oturumda mesaj kanal bildirimiyle anında iletilir. Düz `claude --resume` oturumunda kanal bildirimi düşer. Bu durumda mesaj sırada kalır, oturum onu `gossipcat inbox wait` (arka planda) ya da SessionStart/UserPromptSubmit hook'ları ile alır ve `reply` aracıyla yanıtlar. Ekranda her mesaj için durum gösterilir: sırada, iletildi veya yanıtlandı. Ayrıntılar: [CLAUDE_INBOX.md](CLAUDE_INBOX.md).

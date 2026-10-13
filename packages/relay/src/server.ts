@@ -495,6 +495,25 @@ export class RelayServer {
   }
 
   /**
+   * Reply with an explicit outcome: 'delivered' (written to an open dashboard
+   * stream), 'queued' (no stream open — parked and flushed once when one
+   * opens), or 'rejected' (dashboard disabled, unbound/malformed chat_id).
+   */
+  emitBridgeReplyStatus(chatId: string, text: string, inReplyTo?: readonly string[]): 'delivered' | 'queued' | 'rejected' {
+    return this.dashboardRouter?.emitBridgeReplyStatus(chatId, text, inReplyTo) ?? 'rejected';
+  }
+
+  /**
+   * Declare that the registered bridge sink is a CONFIRMED channel-mode Claude
+   * Code session (launched via `gossipcat code`). Only then does a sink accept
+   * mark the durable inbox entry `delivered`; otherwise it stays `queued` for
+   * `gossipcat inbox wait` / hooks. No-op if the dashboard is disabled.
+   */
+  setBridgeChannelConfirmed(confirmed: boolean): void {
+    this.dashboardRouter?.setBridgeChannelConfirmed(confirmed);
+  }
+
+  /**
    * Ask the dashboard a structured selection question (MCP `gossip_ask` tool).
    * Mirrors emitBridgeReply: chat_id is re-validated + bound to a stream the
    * dashboard actually opened (the same knownChatIds gate as emitReply), the

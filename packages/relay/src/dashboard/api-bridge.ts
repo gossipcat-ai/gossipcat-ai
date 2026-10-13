@@ -32,6 +32,15 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import { MirrorEventStore, MIRROR_RING_MAX, MIRROR_RING_TTL_MS } from './api-mirror-events';
 import { FileChatStore, NullChatStore } from './chat-store';
+import { ClaudeInbox, InboxFullError, inboxDirFor } from './claude-inbox';
+import { computeClaudeLink } from './claude-inbox-watcher';
+import { outboxDirFor, ReplyOutbox } from './bridge-reply-outbox';
+
+/** Outcome of an outbound reply: shown on an open stream, parked for the next one, or refused. */
+export type BridgeReplyStatus = 'delivered' | 'queued' | 'rejected';
+
+/** persistInbound result: stored id, inbox full (→ 507), or no inbox / write failed. */
+type PersistResult = { id: string } | { full: number } | null;
 
 /**
  * In-process sink the MCP server registers. Returns true when the message was
@@ -39,7 +48,7 @@ import { FileChatStore, NullChatStore } from './chat-store';
  * is wired (MCP server not booted / not registered) — the router surfaces that
  * to the dashboard rather than silently dropping.
  */
-export type BridgeSink = (chatId: string, message: string) => boolean;
+export type BridgeSink = (chatId: string, message: string, inboxId?: string | null) => boolean;
 
 /** One outbound frame pushed to the dashboard over SSE. */
 interface BridgeReplyFrame {
@@ -288,7 +297,16 @@ export function validateChatId(raw: unknown): string | null {
 export interface BridgeHubOpts {
   /** When provided, mirror history is persisted under this directory. */
   chatDir?: string;
+  /**
+   * When provided, every Claude-addressed inbound message is FIRST persisted to
+   * the durable inbox under <projectRoot>/.gossip/bridge/inbox (claude-inbox.ts)
+   * and a missing sink queues instead of 503-ing. Absent → legacy behaviour.
+   */
+  projectRoot?: string;
 }
+
+/** Max inbox entries returned per chat by inboxSnapshot (dashboard poll). */
+const INBOX_SNAPSHOT_MAX = 50;
 
 /**
  * BridgeHub — owns the outbound SSE client set and the registered inbound sink.
@@ -361,11 +379,38 @@ export class BridgeHub {
   // session→chat_id entries share the same 2h TTL ceiling as knownChatIds.
   private static readonly MAX_SESSION_MAPPINGS = 64;
 
+  // ── Durable Claude inbox (claude-inbox.ts) ─────────────────────────────────
+  // null when no projectRoot was configured (legacy/test hubs): then a missing
+  // sink still 503s exactly as before.
+  private inbox: ClaudeInbox | null = null;
+  private projectRoot: string | null = null;
+  // True when the app layer believes the CC session runs in channel mode (it
+  // was launched by `gossipcat code`, which exports GOSSIPCAT_CHANNEL_ACTIVE=1).
+  // Used ONLY for the dashboard link state. It never marks a message
+  // delivered: a sink accept just means the notification was handed to the
+  // stdio transport, which CC may still drop. Messages stay `queued` until a
+  // consumer (inbox wait / hook / ack) claims them or `reply` answers the chat
+  // — a duplicate is acceptable, a loss is not (docs/CLAUDE_INBOX.md).
+  private channelConfirmed = false;
+  // Replies emitted while no stream for their chat_id was open; flushed (once)
+  // by handleStream. File-backed when projectRoot is set.
+  private outbox: ReplyOutbox;
+
   constructor(opts: BridgeHubOpts = {}) {
     const store = opts.chatDir
       ? new FileChatStore(opts.chatDir)
       : new NullChatStore();
     this.mirror = new MirrorEventStore(MIRROR_RING_MAX, MIRROR_RING_TTL_MS, undefined, store);
+    if (opts.projectRoot) {
+      this.projectRoot = opts.projectRoot;
+      this.inbox = new ClaudeInbox(inboxDirFor(opts.projectRoot));
+    }
+    this.outbox = new ReplyOutbox(opts.projectRoot ? outboxDirFor(opts.projectRoot) : null);
+  }
+
+  /** App layer: declare whether the live sink is a confirmed channel-mode session. */
+  setChannelConfirmed(confirmed: boolean): void {
+    this.channelConfirmed = confirmed;
   }
 
   /** Register (or clear) the in-process inbound sink. Called by RelayServer. */
@@ -429,7 +474,14 @@ export class BridgeHub {
       chatId = v;
     }
 
-    if (!this.sink) {
+    // Durable inbox FIRST: persisted before any delivery attempt so a dropped
+    // channel notification (plain `claude --resume`, no --channels) or a missing
+    // sink can never lose the message.
+    const persisted = this.persistInbound(chatId, message);
+    if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
+    const inboxId = persisted ? persisted.id : null;
+
+    if (!this.sink && inboxId === null) {
       // No live CC session wired (MCP server not booted, or bridge not active).
       // Tell the dashboard explicitly instead of pretending it was delivered.
       return { status: 503, payload: { error: 'No live Claude Code bridge session is active', chat_id: chatId } };
@@ -444,34 +496,122 @@ export class BridgeHub {
     const sessionId = validateChatId(b.session_id);
     if (sessionId !== null) this.bindSession(sessionId, chatId);
 
-    let delivered: boolean;
-    try {
-      delivered = this.sink(chatId, message);
-    } catch {
-      delivered = false;
-    }
-    if (!delivered) {
+    const delivered = this.callSink(chatId, message, inboxId);
+    if (!delivered && inboxId === null) {
       return { status: 503, payload: { error: 'Bridge sink rejected the message', chat_id: chatId } };
     }
-    return { status: 202, payload: { ok: true, chat_id: chatId } };
+    return { status: 202, payload: { ok: true, chat_id: chatId, ...this.inboxPayload(inboxId, delivered) } };
+  }
+
+  /** Invoke the sink (if any), mapping throws to false. */
+  private callSink(chatId: string, text: string, inboxId: string | null): boolean {
+    if (!this.sink) return false;
+    try {
+      return this.sink(chatId, text, inboxId) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Persist to the durable inbox; null when disabled or the write failed. */
+  private persistInbound(chatId: string, text: string): PersistResult {
+    if (!this.inbox) return null;
+    try {
+      return { id: this.inbox.append(chatId, text).id };
+    } catch (e) {
+      return e instanceof InboxFullError ? { full: e.unanswered } : null;
+    }
+  }
+
+  /**
+   * 507 when the inbox is full of UNANSWERED messages. The store never deletes
+   * an unanswered message to make room, so a new one is refused explicitly
+   * (the dashboard shows the error) instead of silently evicting an older one.
+   */
+  private inboxFullResponse(unanswered: number, chatId: string): { status: number; payload: Record<string, unknown> } {
+    return {
+      status: 507,
+      payload: {
+        error: `Claude inbox is full (${unanswered} unanswered messages). Ask Claude to answer them, or clear them with \`gossipcat inbox ack <id> --answered\`, then resend.`,
+        chat_id: chatId,
+        inbox_full: true,
+      },
+    };
+  }
+
+  /**
+   * Inbox fields for a 202 payload. Always `queued`: a sink accept (even in
+   * channel mode) is not proof Claude saw it — the message stays queued until
+   * `inbox wait` / a hook / `ack` claims it or `reply` answers the chat.
+   * `live` only says a channel notification was also attempted.
+   */
+  private inboxPayload(inboxId: string | null, sinkAccepted: boolean): Record<string, unknown> {
+    if (inboxId === null || !this.inbox) return {};
+    return { inbox_id: inboxId, delivery: 'queued', live: sinkAccepted && this.channelConfirmed };
+  }
+
+  /**
+   * Dashboard poll: per-message delivery status for one chat_id plus a truthful
+   * Claude-reachability signal (sink / channel / `inbox wait` heartbeat).
+   */
+  inboxSnapshot(rawChatId: unknown): { status: number; payload: Record<string, unknown> } {
+    const link = computeClaudeLink({
+      hasSink: this.sink !== null,
+      channelConfirmed: this.channelConfirmed,
+      projectRoot: this.projectRoot,
+    });
+    // stats: unanswered vs capacity + how many answered records were pruned,
+    // so pruning / a nearly-full inbox is visible instead of silent.
+    let stats: Record<string, unknown> | undefined;
+    try { stats = this.inbox ? { ...this.inbox.stats() } : undefined; } catch { stats = undefined; }
+    const base = { link, inbox: this.inbox !== null, ...(stats ? { stats } : {}) };
+    if (rawChatId === null || rawChatId === undefined || rawChatId === '') {
+      return { status: 200, payload: { ...base, messages: [] } };
+    }
+    const chatId = validateChatId(rawChatId);
+    if (chatId === null) return { status: 400, payload: { error: 'invalid chat_id' } };
+    const messages = (this.inbox?.list({ chatId, limit: INBOX_SNAPSHOT_MAX, newestFirst: true }) ?? [])
+      .map((e) => ({ id: e.id, status: e.status, received_at: e.received_at }));
+    return { status: 200, payload: { chat_id: chatId, ...base, messages, pending_replies: this.outbox.count(chatId) } };
   }
 
   /**
    * OUTBOUND: the MCP `reply` tool forwards CC's reply here. Binds chat_id
-   * (consensus f5) — drops a reply addressed to a stream the dashboard never
-   * opened. Always fans out a `reply` frame on success. Returns whether the id
-   * was bound (so the MCP tool can no-op honestly when it wasn't).
+   * (consensus f5) — refuses a reply addressed to a chat the dashboard never
+   * opened. When a stream for the chat_id is open the reply is written to it
+   * ('delivered'); otherwise it is parked in the bounded reply outbox and
+   * flushed once when such a stream opens ('queued') — with the durable inbox
+   * Claude routinely answers while the dashboard tab is closed. Either way the
+   * inbox entries named in `inReplyTo` are marked answered (without it, only
+   * the chat's already-delivered entries — never still-queued ones). 'rejected' = unbound/malformed id
+   * or the reply could not be stored.
    */
-  emitReply(rawChatId: string, text: string): boolean {
+  emitReplyStatus(rawChatId: string, text: string, inReplyTo?: readonly string[]): BridgeReplyStatus {
     const chatId = validateChatId(rawChatId);
-    if (chatId === null) return false;
-    if (!this.isKnownChatId(chatId)) return false;
-    // No connected SSE client → the reply cannot be delivered. Return false so
-    // the MCP `reply` tool surfaces an honest "no open stream" error instead of
-    // reporting a success that silently vanished (consensus f7e5bc15 f5).
-    if (this.clients.size === 0) return false;
-    this.broadcast({ type: 'reply', chat_id: chatId, text, ts: new Date().toISOString() });
-    return true;
+    if (chatId === null || typeof text !== 'string') return 'rejected';
+    if (!this.isKnownChatId(chatId)) return 'rejected';
+    const ts = new Date().toISOString();
+    let status: BridgeReplyStatus = 'delivered';
+    if (this.broadcast({ type: 'reply', chat_id: chatId, text, ts }) === 0) {
+      try {
+        this.outbox.push(chatId, text);
+        status = 'queued';
+      } catch {
+        return 'rejected';
+      }
+    }
+    // The MCP `reply` tool answered this chat → close out its inbox entries so
+    // hooks / `inbox wait` never re-surface them and the dashboard shows it.
+    // An empty id list (no / only-invalid in_reply_to) means "legacy reply":
+    // close only already-delivered entries, never queued ones.
+    const ids = inReplyTo && inReplyTo.length > 0 ? inReplyTo : undefined;
+    try { this.inbox?.markAnswered(chatId, { ids }); } catch { /* best effort */ }
+    return status;
+  }
+
+  /** Boolean form of emitReplyStatus: true when delivered OR queued for delivery. */
+  emitReply(rawChatId: string, text: string): boolean {
+    return this.emitReplyStatus(rawChatId, text) !== 'rejected';
   }
 
   /**
@@ -661,23 +801,21 @@ export class BridgeHub {
       parts.push(`${q.header}: ${segs.join(' · ')}`);
     }
 
-    if (!this.sink) {
+    if (!this.sink && !this.inbox) {
       return { status: 503, payload: { error: 'No live Claude Code bridge session is active' } };
     }
 
     const turn = `[answer qid=${qid}] ${parts.join(' · ')}`;
-    let delivered: boolean;
-    try {
-      delivered = this.sink(chatId, turn);
-    } catch {
-      delivered = false;
-    }
-    if (!delivered) {
-      return { status: 503, payload: { error: 'Bridge sink rejected the answer' } };
+    const persisted = this.persistInbound(chatId, turn);
+    if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
+    const inboxId = persisted ? persisted.id : null;
+    const delivered = this.callSink(chatId, turn, inboxId);
+    if (!delivered && inboxId === null) {
+      return { status: 503, payload: { error: this.sink ? 'Bridge sink rejected the answer' : 'No live Claude Code bridge session is active' } };
     }
     // Single-use: drop the outstanding question so it can't be answered twice.
     this.outstandingQuestions.delete(qid);
-    return { status: 202, payload: { ok: true, qid, chat_id: chatId } };
+    return { status: 202, payload: { ok: true, qid, chat_id: chatId, ...this.inboxPayload(inboxId, delivered) } };
   }
 
   /**
@@ -927,6 +1065,30 @@ export class BridgeHub {
       this.clients.delete(res);
       this.clientChatId.delete(res);
     });
+
+    if (chatId !== null) this.flushPendingReplies(res, chatId);
+  }
+
+  /**
+   * Deliver replies parked while no stream for `chatId` was open (emitReply →
+   * 'queued'). take() removes them first, so each is written at most once; a
+   * write that throws (socket already gone) re-parks the remainder for the
+   * next stream. A backpressured write (false) is still buffered by Node.
+   */
+  private flushPendingReplies(res: ServerResponse, chatId: string): void {
+    let pending: { text: string; ts: string }[];
+    try { pending = this.outbox.take(chatId); } catch { return; }
+    for (let i = 0; i < pending.length; i++) {
+      const frame: BridgeReplyFrame = { type: 'reply', chat_id: chatId, text: pending[i].text, ts: pending[i].ts };
+      try {
+        res.write(`data: ${JSON.stringify(frame)}\n\n`);
+      } catch {
+        for (const rest of pending.slice(i)) {
+          try { this.outbox.push(chatId, rest.text, Date.parse(rest.ts)); } catch { /* bounded store full/IO */ }
+        }
+        return;
+      }
+    }
   }
 
   /**
@@ -971,11 +1133,14 @@ export class BridgeHub {
    * eliminates the prior behaviour of broadcasting EVERY frame to ALL clients
    * (the bandwidth/confidentiality gap noted in the multi-tab fix spec).
    */
-  private broadcast(frame: BridgeReplyFrame | MirrorFrame): void {
+  private broadcast(frame: BridgeReplyFrame | MirrorFrame): number {
     // Mirror frames carry an SSE `id:` line so the browser EventSource exposes
     // lastEventId; reply/ack/restart control frames have no per-chat_id id.
     const idLine = 'id' in frame && typeof (frame as MirrorFrame).id === 'number' ? `id: ${(frame as MirrorFrame).id}\n` : '';
     const data = `${idLine}data: ${JSON.stringify(frame)}\n\n`;
+    // Number of clients that accepted the frame (a backpressured-but-kept
+    // client still buffers it). emitReplyStatus parks the reply when this is 0.
+    let written = 0;
     for (const res of this.clients) {
       // Server-side chat_id filter: only deliver to clients whose subscribed
       // chat_id matches this frame's chat_id. A null-subscribed (legacy) client
@@ -989,6 +1154,7 @@ export class BridgeHub {
         const ok = res.write(data);
         if (ok) {
           this.backpressure.set(res, 0);
+          written++;
         } else {
           const count = (this.backpressure.get(res) ?? 0) + 1;
           this.backpressure.set(res, count);
@@ -997,6 +1163,8 @@ export class BridgeHub {
             res.destroy();
             this.clients.delete(res);
             this.clientChatId.delete(res); // clean up subscription on eviction
+          } else {
+            written++;
           }
         }
       } catch {
@@ -1005,6 +1173,7 @@ export class BridgeHub {
         this.clientChatId.delete(res); // clean up subscription on exception
       }
     }
+    return written;
   }
 
   /** Clear + drop a client's keepalive interval (f12). Safe if absent. */
@@ -1050,7 +1219,14 @@ export class BridgeHub {
 
   private isKnownChatId(chatId: string): boolean {
     this.evictChatIds(Date.now());
-    return this.knownChatIds.has(chatId);
+    if (this.knownChatIds.has(chatId)) return true;
+    // Durable fallback: an id the relay itself persisted to the inbox (only
+    // after handlePost validation) stays replyable across an MCP/relay restart
+    // — the `inbox wait` flow routinely spans one.
+    let persisted = false;
+    try { persisted = this.inbox?.hasChatId(chatId) ?? false; } catch { persisted = false; }
+    if (persisted) this.rememberChatId(chatId);
+    return persisted;
   }
 
   private evictChatIds(now: number): void {

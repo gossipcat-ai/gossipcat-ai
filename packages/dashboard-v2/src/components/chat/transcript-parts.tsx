@@ -1,5 +1,6 @@
 import { renderFindingMarkdown } from '@/lib/utils';
 import type { BridgeMessage } from '@/lib/useBridge';
+import { DeliveryChip } from '@/components/chat/InboxStatus';
 
 /**
  * transcript-parts — render atoms for the activity-mirror v2 "CC-transcript"
@@ -29,7 +30,14 @@ export function UserTurn({ msg }: { msg: BridgeMessage }) {
       <div className="cx-gutter" aria-hidden>
         &rsaquo;
       </div>
-      <div className="cx-body whitespace-pre-wrap break-words">{msg.text}</div>
+      <div className="cx-body whitespace-pre-wrap break-words">
+        {msg.text}
+        {msg.delivery && (
+          <div className="mt-1">
+            <DeliveryChip status={msg.delivery} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

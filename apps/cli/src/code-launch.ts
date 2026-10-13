@@ -176,7 +176,16 @@ export function runCodeCommand(argv: string[]): void {
     claudeArgs = ['--dangerously-load-development-channels', `server:${serverName}`, ...argv];
   }
 
-  const child = spawn('claude', claudeArgs, { stdio: 'inherit' });
+  // GOSSIPCAT_CHANNEL_ACTIVE=1 is the channel-mode CONFIRMATION signal: Claude
+  // Code's stdio MCP server (and hooks) inherit it, so the relay marks a sink-
+  // accepted dashboard message `delivered` and `inbox wait` / hooks skip it (no
+  // double delivery). It also suppresses hook-run's "launch with the channel"
+  // nudge. CLAUDE_CHANNEL_ID was verified NOT to be injected by CC (spec
+  // 2026-06-14 activity-mirror v2, Q3), so this explicit flag is the only signal.
+  const child = spawn('claude', claudeArgs, {
+    stdio: 'inherit',
+    env: { ...process.env, GOSSIPCAT_CHANNEL_ACTIVE: '1' },
+  });
 
   child.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') {

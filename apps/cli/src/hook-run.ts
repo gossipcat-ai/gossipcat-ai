@@ -21,6 +21,7 @@
 import { existsSync, statSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { renderPromptHookInjection } from './inbox-format';
 
 const NO_BOOTSTRAP_HINT =
   '[gossipcat] No bootstrap yet. Load tools first: ToolSearch(query: "select:mcp__gossipcat__gossip_status") then call gossip_status()';
@@ -51,6 +52,21 @@ export interface HookRunOptions {
 export function runHook(opts: HookRunOptions = {}): void {
   const cwd = opts.cwd ?? process.cwd();
   const write = opts.write ?? ((s: string) => { process.stdout.write(s); });
+  try {
+    runBootstrapHook(cwd, write, opts);
+  } finally {
+    // Durable dashboard→Claude inbox: inject any STILL-queued messages (claimed
+    // with an O_EXCL delivered marker, fenced as untrusted data, capped) so a
+    // message is never lost when the `inbox wait` watcher died. Prints nothing
+    // when the inbox is empty. Never throws (fail-open contract).
+    try {
+      const injection = renderPromptHookInjection(cwd);
+      if (injection) write(injection);
+    } catch { /* fail-open */ }
+  }
+}
+
+function runBootstrapHook(cwd: string, write: (s: string) => void, opts: HookRunOptions): void {
   const bootstrapPath = join(cwd, '.gossip', 'bootstrap.md');
 
   // Outer try/catch enforces the fail-open contract. Any unexpected error

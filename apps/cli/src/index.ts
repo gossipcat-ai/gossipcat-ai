@@ -38,6 +38,16 @@ async function main(): Promise<void> {
       return;
     }
 
+    case 'inbox': {
+      // Durable dashboard→Claude inbox — pure file access, never boots MCP.
+      const { runInboxCommand } = await import('./inbox-command');
+      const code = await runInboxCommand(process.argv.slice(3), {
+        out: (s: string) => { process.stdout.write(s); },
+        err: (s: string) => { process.stderr.write(s); },
+      });
+      process.exit(code);
+    }
+
     case 'mcp-serve':
       // Run MCP server via stdio — used by Claude Code / Cursor / any MCP client
       await import('./mcp-server-sdk');
@@ -230,6 +240,8 @@ function printHelp(): void {
     gossipcat sync --setup     Configure Supabase connection
     gossipcat sync --status    Show sync status
     gossipcat code [args...]   Launch Claude Code with gossipcat channel active
+    gossipcat inbox wait       Block until dashboard messages for Claude are queued (exit 2 on timeout)
+    gossipcat inbox list|show|ack   Inspect / acknowledge the dashboard→Claude inbox
     gossipcat mcp-serve        Start MCP server (for Claude Code / Cursor)
     gossipcat hook --run       Run UserPromptSubmit bootstrap hook (internal)
     gossipcat help             Show this help

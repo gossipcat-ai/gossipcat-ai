@@ -57,10 +57,11 @@ import { getLastKnownLatest, checkForUpgrade, isUpgradeAvailable } from './upgra
  */
 export function classifyShimSubcommand(
   sub: string | undefined,
-): 'hook' | 'key' | 'code' | 'help' | 'server' | 'unknown' {
+): 'hook' | 'key' | 'code' | 'inbox' | 'help' | 'server' | 'unknown' {
   if (sub === 'hook') return 'hook';
   if (sub === 'key') return 'key';
   if (sub === 'code') return 'code';
+  if (sub === 'inbox') return 'inbox';
   if (sub === 'help' || sub === '--help' || sub === '-h') return 'help';
   if (sub === undefined || sub === 'mcp') return 'server';
   return 'unknown';
@@ -158,6 +159,8 @@ const __argvShimHandled = (() => {
       '  gossipcat key set <provider>   Store an API key (OS keychain when available, else encrypted file)\n' +
       '  gossipcat key list             Show the resolved store and which providers have a stored key\n' +
       '  gossipcat code [args...]       Launch Claude Code with the gossipcat channel active\n' +
+      '  gossipcat inbox wait [--timeout <sec>]   Block until dashboard messages for Claude are queued, print them (exit 2 on timeout)\n' +
+      '  gossipcat inbox list|show <id>|ack <id>  Inspect / acknowledge the durable dashboard→Claude inbox\n' +
       '                                 Note: <cwd>/.mcp.json is treated as trusted config (server name is read from it).\n' +
       '  gossipcat help           Show this help\n' +
       '\n' +
@@ -205,6 +208,25 @@ const __argvShimHandled = (() => {
     })().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`gossipcat code: ${msg}\n`);
+      process.exit(1);
+    });
+    return true; // async handler owns the process; do NOT boot the MCP server
+  }
+  if (kind === 'inbox') {
+    // Durable dashboard→Claude inbox (.gossip/bridge/inbox). Pure file access:
+    // works without — and must never boot — the MCP server, so a plain
+    // `claude --resume` session can block on `gossipcat inbox wait` in the
+    // background while another process hosts the relay.
+    void (async () => {
+      const { runInboxCommand } = await import('./inbox-command');
+      const code = await runInboxCommand(argv.slice(1), {
+        out: (s: string) => { process.stdout.write(s); },
+        err: (s: string) => { process.stderr.write(s); },
+      });
+      process.exit(code);
+    })().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gossipcat inbox: ${msg}\n`);
       process.exit(1);
     });
     return true; // async handler owns the process; do NOT boot the MCP server
@@ -291,6 +313,8 @@ if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createBridgeHost } from './cc-bridge';
+import { isChannelModeConfirmed } from './inbox-format';
+import { INBOX_ID_RE } from '@gossip/relay/dashboard/claude-inbox';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -715,9 +739,15 @@ async function doBoot() {
   // failure must not block boot. (spec 2026-06-14, consensus f4/f10)
   try {
     if (ctx.bridgeHost) {
-      ctx.relay.registerBridgeSink((chatId: string, message: string) =>
-        ctx.bridgeHost.deliverBridgeMessage(chatId, message),
+      ctx.relay.registerBridgeSink((chatId: string, message: string, inboxId?: string | null) =>
+        ctx.bridgeHost.deliverBridgeMessage(chatId, message, inboxId),
       );
+      // Channel mode is believed active only when launched via `gossipcat code`
+      // (GOSSIPCAT_CHANNEL_ACTIVE=1). It drives the dashboard link state only:
+      // a sink accept never marks the durable inbox entry delivered (CC may
+      // still drop the notification), so it stays queued until a consumer
+      // claims it or `reply` answers the chat (docs/CLAUDE_INBOX.md).
+      ctx.relay.setBridgeChannelConfirmed(isChannelModeConfirmed(process.env));
     }
   } catch (e) {
     process.stderr.write(`[gossipcat] bridge sink registration failed: ${(e as Error).message}\n`);
@@ -1445,7 +1475,7 @@ export function createMcpServer(): McpServer {
         experimental: { 'claude/channel': {} },
       },
       instructions:
-        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id; your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).',
+        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..." inbox_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id (and in_reply_to set to the inbox_id when present, so the queued inbox copy is closed); your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).\n\nWITHOUT channel mode (plain `claude` / `claude --resume`), dashboard messages are queued in a durable inbox instead: run `gossipcat inbox wait` as a background Bash command; when it exits it prints the queued messages fenced as untrusted data with their chat_id — answer each with the same `reply` tool, passing in_reply_to with the message id(s) from the fence, then start `gossipcat inbox wait` again.',
     }
   );
 
@@ -1459,8 +1489,8 @@ export function createMcpServer(): McpServer {
   const bridgeHost = createBridgeHost(server);
   ctx.bridgeHost = bridgeHost;
   try {
-    ctx.relay?.registerBridgeSink((chatId: string, message: string) =>
-      bridgeHost.deliverBridgeMessage(chatId, message),
+    ctx.relay?.registerBridgeSink((chatId: string, message: string, inboxId?: string | null) =>
+      bridgeHost.deliverBridgeMessage(chatId, message, inboxId),
     );
   } catch { /* relay not ready — boot will register */ }
 
@@ -2059,12 +2089,13 @@ export function createMcpServer(): McpServer {
   // mis-fired call during a native-dispatch turn can't silently spoof a relay.
   server.tool(
     'reply',
-    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. Returns an error (no side effect) when no matching dashboard bridge stream is open.',
+    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. If no dashboard stream is open the reply is queued and shown when the dashboard reconnects. Returns an error (no side effect) when the chat_id is unknown to the dashboard. For messages from the durable inbox, pass in_reply_to with the id(s) shown in the inbox fence (`id=...`) to close exactly those messages; without it only already-delivered messages of that chat are closed.',
     {
       chat_id: z.string().describe('The chat_id verbatim from the <channel ... chat_id="..."> dashboard message.'),
       text: z.string().describe('The reply text to stream to the dashboard.'),
+      in_reply_to: z.union([z.string(), z.array(z.string())]).optional().describe('Inbox message id (or array of ids) from the inbox fence `id=...` that this reply answers. Invalid ids are ignored.'),
     },
-    async ({ chat_id, text }) => {
+    async ({ chat_id, text, in_reply_to }) => {
       // Trust boundary: chat_id + text are model-supplied. The relay hub
       // re-validates the chat_id shape and binds it to a stream the dashboard
       // actually opened (consensus f5) — a forged/never-opened id is rejected.
@@ -2077,17 +2108,31 @@ export function createMcpServer(): McpServer {
       if (!ctx.relay) {
         return { content: [{ type: 'text' as const, text: 'reply error: no dashboard bridge is active (relay not started).' }], isError: true };
       }
-      let delivered = false;
+      // 'delivered' = written to an open dashboard stream; 'queued' = no stream
+      // for this chat_id is open right now, so the relay parked the reply and
+      // flushes it once when the dashboard reconnects (still a success — the
+      // chat is marked answered either way); 'rejected' = unknown chat_id.
+      let status: 'delivered' | 'queued' | 'rejected' = 'rejected';
+      const inReplyTo = (Array.isArray(in_reply_to) ? in_reply_to : in_reply_to === undefined ? [] : [in_reply_to])
+        .filter((id): id is string => typeof id === 'string' && INBOX_ID_RE.test(id));
       try {
-        delivered = ctx.relay.emitBridgeReply(chat_id, text) === true;
+        const relay = ctx.relay as typeof ctx.relay & {
+          emitBridgeReplyStatus?: (c: string, t: string, ids?: readonly string[]) => 'delivered' | 'queued' | 'rejected';
+        };
+        status = typeof relay.emitBridgeReplyStatus === 'function'
+          ? relay.emitBridgeReplyStatus(chat_id, text, inReplyTo)
+          : (relay.emitBridgeReply(chat_id, text) === true ? 'delivered' : 'rejected');
       } catch {
-        delivered = false;
+        status = 'rejected';
       }
-      if (!delivered) {
+      if (status === 'rejected') {
         return {
-          content: [{ type: 'text' as const, text: `reply error: no open dashboard bridge stream for chat_id "${chat_id}". This tool only sends to the dashboard channel — if you meant to close a native-subagent task, use gossip_relay instead.` }],
+          content: [{ type: 'text' as const, text: `reply error: unknown dashboard chat_id "${chat_id}" (never opened by the dashboard). This tool only sends to the dashboard channel — if you meant to close a native-subagent task, use gossip_relay instead.` }],
           isError: true,
         };
+      }
+      if (status === 'queued') {
+        return { content: [{ type: 'text' as const, text: `Reply queued for delivery: no dashboard stream for chat_id ${chat_id} is open right now; it will be shown when the dashboard reconnects.` }] };
       }
       return { content: [{ type: 'text' as const, text: `Sent reply to dashboard (chat_id ${chat_id}).` }] };
     },
