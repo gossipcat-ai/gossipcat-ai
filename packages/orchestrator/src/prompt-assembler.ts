@@ -1,9 +1,9 @@
 import * as path from 'path';
-import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL } from './finding-tag-schema';
+import { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL, AGENT_MESSAGE_HINT } from './finding-tag-schema';
 import { sanitizePromptMarkers } from './prompt-markers';
 
 // Re-exported so existing import sites (`@gossip/orchestrator`) keep working.
-export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL };
+export { FINDING_TAG_SCHEMA, CONSENSUS_OUTPUT_FORMAT, OUTPUT_DELIVERY_PROTOCOL, AGENT_MESSAGE_HINT };
 
 /**
  * Sole owner of the SKILLS block delimiters (issue #677).
@@ -204,6 +204,12 @@ export function assemblePrompt(parts: {
    * omitted entirely (never an empty header).
    */
   retrievedLessons?: string;
+  /**
+   * Pre-rendered INBOX MAIL block (agent mail addressed to this agent, already
+   * fenced as untrusted data). Placed right before TASK so the task stays last
+   * and takes precedence; dropped first under suffix pressure.
+   */
+  inboxMail?: string;
   /** The actual task to perform — placed last, always preserved under truncation. */
   task?: string;
 }): string {
@@ -255,10 +261,12 @@ export function assemblePrompt(parts: {
   // Priority 4: AGENT MEMORY (generic write pointer).
   // Priority 5: sessionContext.
   // Priority 6: context (freeform — least critical).
+  // Priority 7: inboxMail (agent mail — informational, dropped first).
   if (parts.consensusSummary) {
     // Consensus dispatches need the full cross-review framing.
     suffix.push({ priority: 0, text: `\n\n--- CONSENSUS OUTPUT FORMAT ---\n${CONSENSUS_OUTPUT_FORMAT}\n\nThis section will be used for cross-review with peer agents.\n--- END CONSENSUS OUTPUT FORMAT ---` });
     suffix.push({ priority: 0, text: `\n\n${OUTPUT_DELIVERY_PROTOCOL}` });
+    suffix.push({ priority: 0, text: `\n\n${AGENT_MESSAGE_HINT}` });
   } else {
     // Non-consensus dispatches still need the type enum + anti-invention rule
     // so agent output is parseable when the dashboard retroactively shows it.
@@ -274,11 +282,12 @@ export function assemblePrompt(parts: {
       parts.task ||
       (parts.consensusFindings && parts.consensusFindings.length > 0) ||
       (parts.agentCorrections && parts.agentCorrections.length > 0) ||
-      !!parts.retrievedLessons
+      !!parts.retrievedLessons || !!parts.inboxMail
     );
     if (hasAnyMeaningfulPart) {
       suffix.push({ priority: 0, text: `\n\n--- FINDING TAG SCHEMA ---\n${FINDING_TAG_SCHEMA}\n--- END FINDING TAG SCHEMA ---` });
       suffix.push({ priority: 0, text: `\n\n${OUTPUT_DELIVERY_PROTOCOL}` });
+      suffix.push({ priority: 0, text: `\n\n${AGENT_MESSAGE_HINT}` });
     }
   }
 
@@ -350,6 +359,10 @@ Keep entries concise (5-10 lines each). Update existing files rather than creati
 
   if (parts.context) {
     suffix.push({ priority: 6, text: `\n\nContext:\n${parts.context}` });
+  }
+
+  if (parts.inboxMail) {
+    suffix.push({ priority: 7, text: `\n\n${parts.inboxMail}` });
   }
 
   // TASK last — the most important surviving element, mandatory priority.

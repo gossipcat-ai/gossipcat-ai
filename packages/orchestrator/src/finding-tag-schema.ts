@@ -35,6 +35,13 @@ export const FINDING_TAG_SCHEMA = `FINDING TAG SCHEMA (output parsing requires t
  */
 export const OUTPUT_DELIVERY_PROTOCOL = `OUTPUT DELIVERY — emit findings as TEXT in your response. The orchestrator captures your response and calls gossip_relay on your behalf. Do NOT call gossip_relay, gossip_relay_cross_review, or any gossip_* tool yourself — these are orchestrator-only. Stop when your findings are written; do not try to "submit" or "finalize".`;
 
+/**
+ * Agent → orchestrator mail (spec 2026-10-13-agent-inbox-addressing, step 3).
+ * Own block for the same byte-size reason as OUTPUT_DELIVERY_PROTOCOL. Task
+ * prompts only — never cross-review prompts.
+ */
+export const AGENT_MESSAGE_HINT = `AGENT MAIL (optional) — for a question or blocker for the orchestrator that is NOT part of your task result or findings, you MAY add a short <agent_message to="orchestrator">text</agent_message> to your response (max 5); to answer inbox mail, add in_reply_to="<its id>".`;
+
 export const CONSENSUS_OUTPUT_FORMAT = `⚠ UNKNOWN TYPES ARE SILENTLY DROPPED — only type="finding", type="suggestion", type="insight" are accepted. Any other type value (e.g. approval, concern, risk, recommendation, confirmed) will NOT appear in the dashboard, scores, or signals.
 
 ${FINDING_TAG_SCHEMA}

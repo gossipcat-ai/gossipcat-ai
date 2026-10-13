@@ -344,6 +344,7 @@ export function cacheColdPathStore(
   }
 }
 import { persistRelayTasks } from './relay-tasks';
+import { commitNativeAgentMail, joinPreTaskBlocks, prepareNativeAgentMail } from './native-agent-mail';
 import {
   prependScopeNote,
   prependUnverifiedNote,
@@ -947,10 +948,13 @@ export async function handleDispatchSingle(
     // routed through `retrievedLessons` (cold) / `composeWarmBody` (warm)
     // instead of being spliced into the finished prompt. See buildLessonBlock.
     const singleLessonBlock = buildLessonBlock({ agentId: agent_id, task, taskId });
+    // Agent mail (inbox spec step 4) — per-dispatch, so like lessons it never
+    // enters the warm cache; marked delivered only if it lands in the prompt.
+    const singleMail = prepareNativeAgentMail(agent_id);
 
     let agentPrompt: string;
     let singleWarm = false;
-    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format, singleLessonBlock);
+    const singleWarmBody = tryWarmCacheHit(singleLiveTaskTail, singleCacheKey, prompt_format, joinPreTaskBlocks(singleLessonBlock, singleMail));
     if (singleWarmBody) {
       agentPrompt = singleWarmBody;
       singleWarm = true;
@@ -977,10 +981,11 @@ export async function handleDispatchSingle(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, singleCacheKey, singleLiveTaskTail);
       }
-      if (singleLessonBlock) {
-        agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock });
+      if (singleLessonBlock || singleMail) {
+        agentPrompt = assemblePrompt({ ...singleParts, retrievedLessons: singleLessonBlock || undefined, inboxMail: singleMail?.block });
       }
     }
+    commitNativeAgentMail(singleMail, agentPrompt, taskId);
     if (sanitizeResult.sanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B). SCOPE NOTE composes first
     // (enforcement boundary); UNVERIFIED note layered on top (behavioral).
@@ -1413,9 +1418,11 @@ export async function handleDispatchParallel(
       agentId: def.agent_id, task: def.task, taskId, consensus,
     });
 
+    const parallelMail = prepareNativeAgentMail(def.agent_id); // see singleMail
+
     let agentPrompt: string;
     let parallelWarm = false;
-    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format, parallelLessonBlock);
+    const parallelWarmBody = tryWarmCacheHit(parallelLiveTaskTail, parallelCacheKey, prompt_format, joinPreTaskBlocks(parallelLessonBlock, parallelMail));
     if (parallelWarmBody) {
       agentPrompt = parallelWarmBody;
       parallelWarm = true;
@@ -1437,10 +1444,11 @@ export async function handleDispatchParallel(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, parallelCacheKey, parallelLiveTaskTail);
       }
-      if (parallelLessonBlock) {
-        agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock });
+      if (parallelLessonBlock || parallelMail) {
+        agentPrompt = assemblePrompt({ ...parallelParts, retrievedLessons: parallelLessonBlock || undefined, inboxMail: parallelMail?.block });
       }
     }
+    commitNativeAgentMail(parallelMail, agentPrompt, taskId);
     if ((def as any)._sandboxSanitized) agentPrompt = prependScopeNote(agentPrompt);
     // Premise verification (Component B) — per-def in the native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
@@ -1799,9 +1807,11 @@ export async function handleDispatchConsensus(
       agentId: def.agent_id, task: def.task, taskId, consensus: true,
     });
 
+    const consensusMail = prepareNativeAgentMail(def.agent_id); // see singleMail
+
     let agentPrompt: string;
     let consensusWarm = false;
-    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format, consensusLessonBlock);
+    const consensusWarmBody = tryWarmCacheHit(consensusLiveTaskTail, consensusCacheKey, prompt_format, joinPreTaskBlocks(consensusLessonBlock, consensusMail));
     if (consensusWarmBody) {
       agentPrompt = consensusWarmBody;
       consensusWarm = true;
@@ -1824,10 +1834,11 @@ export async function handleDispatchConsensus(
       if (prompt_format === 'elided') {
         cacheColdPathStore(process.cwd(), agentPrompt, consensusCacheKey, consensusLiveTaskTail);
       }
-      if (consensusLessonBlock) {
-        agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock });
+      if (consensusLessonBlock || consensusMail) {
+        agentPrompt = assemblePrompt({ ...consensusParts, retrievedLessons: consensusLessonBlock || undefined, inboxMail: consensusMail?.block });
       }
     }
+    commitNativeAgentMail(consensusMail, agentPrompt, taskId);
     // Premise verification (Component B) — per-def in the consensus native loop.
     agentPrompt = maybeApplyUnverifiedNote(agentPrompt, def.task, def.agent_id);
 

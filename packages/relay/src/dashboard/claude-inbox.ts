@@ -46,7 +46,7 @@ export interface InboxEntry extends ResolvedEnvelope {
   content: string;
   received_at: string;
   status: InboxStatus;
-  /** Who marked it delivered ('wait' | 'hook' | 'ack' | 'reply'), when known. */
+  /** Who marked it delivered ('wait' | 'hook' | 'ack' | 'reply' | 'dispatch:<task_id>'), when known. */
   delivered_via?: string;
   /** When it was marked delivered, when known. */
   delivered_at?: string;
@@ -106,6 +106,8 @@ const MARKERS = ['delivered', 'answered'] as const;
 type Marker = (typeof MARKERS)[number];
 const AUX_SUFFIXES = ['delivered', 'answered', 'reminded'] as const;
 const SMALL_FILE_BYTES = 4096;
+/** `wait` | `hook` | `ack` | `reply`, or `dispatch:<task_id>` for agent mail injected into a prompt. */
+const DELIVERED_VIA_RE = /^[a-z]{1,16}(?::[A-Za-z0-9_-]{1,64})?$/;
 
 /** Canonical inbox dir for a project root. */
 export function inboxDirFor(projectRoot: string): string {
@@ -350,7 +352,7 @@ export class ClaudeInbox {
     if (!r || r === 'oversized') return {};
     const v = r.value as { via?: unknown; at?: unknown } | null;
     const out: Pick<InboxEntry, 'delivered_via' | 'delivered_at'> = {};
-    if (v && typeof v.via === 'string' && /^[a-z]{1,16}$/.test(v.via)) out.delivered_via = v.via;
+    if (v && typeof v.via === 'string' && DELIVERED_VIA_RE.test(v.via)) out.delivered_via = v.via;
     if (v && isCanonicalIso(v.at)) out.delivered_at = v.at;
     return out;
   }

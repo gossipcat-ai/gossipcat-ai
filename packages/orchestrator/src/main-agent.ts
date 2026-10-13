@@ -22,6 +22,7 @@ import { ToolRouter, ToolExecutor } from './tool-router';
 import { buildToolSystemPrompt, getOrchestratorToolDefinitions, PLAN_CHOICES, PENDING_PLAN_CHOICES } from './tool-definitions';
 import { ProjectInitializer } from './project-initializer';
 import { TeamManager } from './team-manager';
+import type { AgentMailPort } from './agent-mail-port';
 
 const CHAT_SYSTEM_PROMPT = `You are the **orchestrator** of Gossip Mesh — a multi-agent system.
 
@@ -89,6 +90,8 @@ export interface MainAgentConfig {
   toolServer?: ToolServerCallbacks | null;
   keyProvider?: (provider: string) => Promise<string | null>;
   siblingRoots?: readonly string[];
+  /** Agent mail hooks (inbox-backed, injected by the CLI). */
+  agentMail?: AgentMailPort | null;
 }
 
 export class MainAgent {
@@ -154,6 +157,7 @@ export class MainAgent {
       toolServer: config.toolServer,
       keyProvider: config.keyProvider,
       siblingRoots: config.siblingRoots ?? [],
+      agentMail: config.agentMail ?? null,
     });
 
     // Wire dispatch differentiator (after pipeline creation)
