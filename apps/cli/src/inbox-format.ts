@@ -23,16 +23,19 @@
  * lose output (process killed between the two), so the hooks AND the idle
  * watcher (`inbox wait`) RE-SURFACE delivered-but-unanswered messages after
  * UNANSWERED_GRACE_MS (at most once per grace period across all consumers —
- * the `reminded` marker is claimed race-free, ClaudeInbox.claimReminder) until
+ * each reminder is a monotonic O_EXCL marker, ClaudeInbox.claimReminder) until
  * `gossip_chat_reply` or `inbox ack --answered` closes them, and at most
- * INBOX_MAX_REMINDERS times. Duplicates are acceptable; losses are not.
+ * INBOX_MAX_REMINDERS times; the output carrying the final reminder says so
+ * (LIMIT_NOTE, once per message). Duplicates are acceptable; losses are not.
  */
 import { existsSync, statSync } from 'fs';
 import { dirname, join, resolve } from 'path';
-import { ClaudeInbox, inboxDirFor, type InboxEntry } from '@gossip/relay/dashboard/claude-inbox';
+import { ClaudeInbox, inboxDirFor, INBOX_MAX_REMINDERS, type InboxEntry } from '@gossip/relay/dashboard/claude-inbox';
 import { headerSafe, pickNonce, sanitizeUntrusted } from '@gossip/relay/dashboard/inbox-fence';
 
 export { headerSafe, pickNonce, sanitizeUntrusted } from '@gossip/relay/dashboard/inbox-fence';
+/** After this many reminders a message is no longer re-surfaced automatically (`inbox list` still shows it). */
+export { INBOX_MAX_REMINDERS } from '@gossip/relay/dashboard/claude-inbox';
 
 /** One-line, length-capped preview for `inbox list`. */
 export function previewLine(text: string, max = 60): string {
@@ -131,14 +134,14 @@ function renderBlocks(blocks: readonly FencedBlock[], opts: { remaining?: number
 
 /**
  * Render a batch (wait / hooks). Ids in `resurfaced` are labelled as
- * unanswered reminders.
+ * unanswered reminders (with the limit note on the final one).
  */
 export function renderBatch(
   entries: InboxEntry[],
   opts: { maxChars?: number; remaining?: number; footer?: string; resurfaced?: ReadonlySet<string> } = {},
 ): string {
   return renderBlocks(entries.map((e) => ({
-    text: fenceMessage(e, opts.maxChars, opts.resurfaced?.has(e.id) ? UNANSWERED_LABEL : undefined),
+    text: fenceMessage(e, opts.maxChars, opts.resurfaced?.has(e.id) ? reminderLabel(e.id, e.reminded_count ?? 0) : undefined),
     agent: isAgentMail(e),
   })), opts);
 }
@@ -202,8 +205,6 @@ const HOOK_SCAN_LIMIT = 25;
 export const HOOK_MAX_TOTAL_CHARS = 12_000;
 /** Delivered-but-unanswered messages older than this are re-surfaced by hooks and the watcher. */
 export const UNANSWERED_GRACE_MS = 10 * 60 * 1000;
-/** After this many reminders a message is no longer re-surfaced automatically (`inbox list` still shows it). */
-export const INBOX_MAX_REMINDERS = 6;
 /**
  * Confirmed channel mode: a fresh queued message most likely also arrived as a
  * channel turn, so hooks leave it alone this long (a `gossip_chat_reply` closes it); after
@@ -213,6 +214,16 @@ export const CHANNEL_GRACE_MS = 2 * 60 * 1000;
 
 const UNANSWERED_LABEL =
   '[unanswered — shown to Claude earlier but no `gossip_chat_reply` yet; answer it now, or close it with `gossipcat inbox ack <id> --answered`]';
+
+/** Shown with a message's final automatic reminder (exactly one consumer claims it). */
+export function limitNote(id: string): string {
+  return `[reminder limit reached for ${headerSafe(id)}; it stays visible in \`gossipcat inbox list\`]`;
+}
+
+/** Label of reminder number `count` (the final one carries the limit note). */
+function reminderLabel(id: string, count: number): string {
+  return count >= INBOX_MAX_REMINDERS ? `${UNANSWERED_LABEL}\n${limitNote(id)}` : UNANSWERED_LABEL;
+}
 
 function ageOf(iso: string | undefined, now: number): number {
   return iso ? now - Date.parse(iso) : Infinity;
@@ -240,19 +251,29 @@ export function dueUnanswered(inbox: ClaudeInbox, opts: { now: number; channel?:
   });
 }
 
-/** Claim the next reminder of `e` (race-free across hooks and watchers). */
-function claimReminder(inbox: ClaudeInbox, e: InboxEntry, now: number): boolean {
-  return inbox.claimReminder(e.id, now, (state) => reminderDue(state, now)) !== null;
+/**
+ * Claim the next reminder of `e` (race-free across hooks and watchers): the
+ * entry with its new reminder count, or null when another consumer won.
+ */
+function claimReminder(inbox: ClaudeInbox, e: InboxEntry, now: number): InboxEntry | null {
+  const count = inbox.claimReminder(e.id, now, (state) => reminderDue(state, now));
+  return count === null ? null : { ...e, reminded_at: new Date(now).toISOString(), reminded_count: count };
 }
 
 /**
  * Watcher idle recovery: claim reminders for up to `max` due unanswered
- * messages (see dueUnanswered). Returns the entries this call claimed.
+ * messages (see dueUnanswered). Returns the entries this call claimed, with
+ * their new reminded_count.
  */
 export function claimUnanswered(inbox: ClaudeInbox, max: number, opts: { now?: number; channel?: boolean } = {}): InboxEntry[] {
   const now = opts.now ?? Date.now();
   if (max <= 0) return [];
-  return dueUnanswered(inbox, { now, channel: opts.channel, limit: max }).filter((e) => claimReminder(inbox, e, now));
+  const out: InboxEntry[] = [];
+  for (const e of dueUnanswered(inbox, { now, channel: opts.channel, limit: max })) {
+    const claimed = claimReminder(inbox, e, now);
+    if (claimed) out.push(claimed);
+  }
+  return out;
 }
 
 /**
@@ -286,10 +307,14 @@ export function claimForHook(
   const candidates = [...queued.map((e) => ({ e, re: false })), ...unanswered.map((e) => ({ e, re: true }))];
   for (const { e, re } of candidates) {
     if (blocks.length >= HOOK_MAX_MESSAGES) { skipped++; continue; }
-    const block = fenceMessage(e, HOOK_MAX_CHARS, re ? UNANSWERED_LABEL : undefined);
+    // Budget reminders with the (longest) final-reminder label.
+    let block = fenceMessage(e, HOOK_MAX_CHARS, re ? reminderLabel(e.id, INBOX_MAX_REMINDERS) : undefined);
     if (used + block.length + 2 > HOOK_MAX_TOTAL_CHARS) { skipped++; continue; }
-    if (re) { if (!claimReminder(inbox, e, now)) continue; } // another consumer reminded it
-    else if (!inbox.mark(e.id, 'delivered', 'hook', consumerFor('hook'))) continue; // another consumer won
+    if (re) {
+      const claimed = claimReminder(inbox, e, now);
+      if (!claimed) continue; // another consumer reminded it
+      block = fenceMessage(e, HOOK_MAX_CHARS, reminderLabel(e.id, claimed.reminded_count ?? 0));
+    } else if (!inbox.mark(e.id, 'delivered', 'hook', consumerFor('hook'))) continue; // another consumer won
     blocks.push({ text: block, agent: isAgentMail(e) });
     used += block.length + 2;
   }

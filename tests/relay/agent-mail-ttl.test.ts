@@ -56,8 +56,15 @@ describe('agent mail TTL', () => {
     expect(lines.find((l) => l.startsWith(human.id))).toContain('delivered');
     const j: string[] = [];
     await runInboxCommand(['list', '--json'], { out: (s) => j.push(s), err: () => undefined, root });
-    expect(JSON.parse(j.join('')).find((e: { id: string }) => e.id === toAgent.id))
-      .toMatchObject({ status: 'answered', answered_via: 'expired' });
+    const listed = JSON.parse(j.join('')) as { id: string; status: string; outcome?: string }[];
+    expect(listed.find((e) => e.id === toAgent.id)).toMatchObject({ status: 'answered', outcome: 'expired', answered_via: 'expired' });
+    expect(listed.find((e) => e.id === human.id)?.outcome).toBeUndefined();
+    inbox.markAnswered('chat-h', { ids: [human.id] });
+    const j2: string[] = [];
+    await runInboxCommand(['list', '--json'], { out: (s) => j2.push(s), err: () => undefined, root });
+    expect((JSON.parse(j2.join('')) as { id: string; outcome?: string }[]).find((e) => e.id === human.id))
+      .toMatchObject({ status: 'answered', outcome: 'answered' });
+    expect(inbox.stats()).toMatchObject({ expired: 2, answered: 3 });
   });
 
   it('frees the sender quota and the shared cap once expired', () => {

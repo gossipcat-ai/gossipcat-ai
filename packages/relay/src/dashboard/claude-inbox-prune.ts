@@ -6,10 +6,11 @@
  * the answered-count cap, oldest first). Queued and delivered-unanswered
  * records are never pruned — the store refuses new appends instead.
  *
- * Agent mail TTL: agent → orchestrator and orchestrator → agent mail still
- * unanswered after AGENT_MAIL_TTL_MS is closed as answered(via 'expired') by
- * the store's prune pass, so it stops counting toward the caps. Human mail
- * never expires.
+ * Agent mail TTL: agent → orchestrator and orchestrator → agent mail whose
+ * last activity (received, delivered or reminded) is older than
+ * AGENT_MAIL_TTL_MS while still unanswered is closed as answered(via
+ * 'expired') by the store's prune pass, so it stops counting toward the caps.
+ * Human mail never expires.
  */
 
 import { join } from 'path';
@@ -22,13 +23,22 @@ export interface PrunePlan {
   unlink: string[];
 }
 
+/** A `.tmp` file (atomic write in progress) whose own mtime is older than this is stale. */
+export const TMP_STALE_MS = 60_000;
+
 /**
  * Decide what to prune from a directory listing. `idRe` validates record ids,
  * `aux` lists per-record suffixes (markers) that die with their record.
+ * `.tmp` files are aged by their OWN mtime (`mtimeOf`, null = gone), never by
+ * the message id — a fresh temp file of an old message is still being written.
+ * At most `maxStats` tmp files are stat'ed per pass.
  */
 export function planPrune(
   names: readonly string[], now: number,
-  opts: { idRe: RegExp; aux: readonly string[]; retentionMs: number; maxAnswered: number },
+  opts: {
+    idRe: RegExp; aux: readonly string[]; retentionMs: number; maxAnswered: number;
+    mtimeOf: (name: string) => number | null; maxStats: number;
+  },
 ): PrunePlan {
   const present = new Set(names);
   const ids = names
@@ -42,12 +52,18 @@ export function planPrune(
   for (let i = 0; i < keptAnswered.length - opts.maxAnswered; i++) drop.add(keptAnswered[i]);
   const idSet = new Set(ids);
   const unlink: string[] = [];
+  let stats = 0;
+  const staleTmp = (n: string): boolean => {
+    if (++stats > opts.maxStats) return false;
+    const mtime = opts.mtimeOf(n);
+    return mtime !== null && now - mtime > TMP_STALE_MS;
+  };
   for (const n of names) {
     const base = n.split('.')[0];
     if (drop.has(base)) continue; // removed with its record
     const isAux = opts.aux.some((m) => n === `${base}.${m}`);
     if (isAux && !idSet.has(base)) unlink.push(n);
-    else if (n.endsWith('.tmp') && age(base) > 60_000) unlink.push(n);
+    else if (n.endsWith('.tmp')) { if (staleTmp(n)) unlink.push(n); }
     else if (n === `${base}.quarantine` && age(base) > opts.retentionMs) unlink.push(n);
   }
   return { drop, unlink };
@@ -68,7 +84,9 @@ export function isExpirableMail(env: { from: string; to: string }): boolean {
 
 /**
  * Unanswered record ids older than `ttlMs` (by their ms id prefix), oldest
- * first and at most `max` — names only, no reads.
+ * first and at most `max` — names only, no reads. The id is the EARLIEST
+ * activity, so this is only a pre-filter: the store then checks the last
+ * activity (claude-inbox-reminder.ts isIdlePastTtl).
  */
 export function planExpiryCandidates(
   names: readonly string[], now: number, opts: { idRe: RegExp; ttlMs: number; max: number },

@@ -2,12 +2,12 @@
  * Per-consumer watcher heartbeats (.gossip/bridge/watchers/<pid>.json) —
  * agent-inbox spec step 5.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   clearWatcherHeartbeat, computeClaudeLink, countLiveWatchers, isWatcherListening, readWatcherHeartbeats,
-  watcherConsumerPathFor, watcherHeartbeatPathFor, watchersDirFor, writeWatcherHeartbeat, WATCHER_PRUNE_MS,
+  watcherConsumerPathFor, watcherHeartbeatPathFor, watchersDirFor, writeWatcherHeartbeat, WATCHER_PRUNE_MS, WATCHER_SCAN_MAX,
 } from '@gossip/relay/dashboard/claude-inbox-watcher';
 
 let root: string;
@@ -69,5 +69,54 @@ describe('per-consumer watcher heartbeats', () => {
     clearWatcherHeartbeat(root, 0, now, A); // removes ours, including the legacy file
     expect(existsSync(watcherHeartbeatPathFor(root))).toBe(false);
     expect(countLiveWatchers(root, now)).toBe(0);
+  });
+
+  it('a live watcher is found behind more than WATCHER_SCAN_MAX stale entries', () => {
+    const now = Date.now();
+    const dir = watchersDirFor(root);
+    mkdirSync(dir, { recursive: true });
+    const staleAt = new Date(now - 10 * 60_000);
+    for (let i = 0; i < WATCHER_SCAN_MAX + 6; i++) {
+      const pid = 3_000_000 + i;
+      const p = watcherConsumerPathFor(root, pid);
+      writeFileSync(p, JSON.stringify({ pid, at: staleAt.toISOString() }));
+      utimesSync(p, staleAt, staleAt);
+    }
+    writeWatcherHeartbeat(root, now, A);
+    expect(readWatcherHeartbeats(root, now).map((h) => h.pid)).toContain(A);
+    expect(countLiveWatchers(root, now)).toBe(1);
+  });
+
+  it('never touches non-heartbeat names in the watchers dir', () => {
+    const now = Date.now();
+    const dir = watchersDirFor(root);
+    mkdirSync(dir, { recursive: true });
+    const old = new Date(now - WATCHER_PRUNE_MS - 60_000);
+    for (const n of ['notes.tmp', 'x.json', 'abc.json.1.ff.tmp']) {
+      writeFileSync(join(dir, n), '{}');
+      utimesSync(join(dir, n), old, old);
+    }
+    readWatcherHeartbeats(root, now);
+    expect(readdirSync(dir).sort()).toEqual(['abc.json.1.ff.tmp', 'notes.tmp', 'x.json']);
+  });
+
+  it('a symlinked watchers dir is never written, read or pruned through', () => {
+    const now = Date.now();
+    const target = mkdtempSync(join(tmpdir(), 'inbox-watchers-target-'));
+    try {
+      const stale = join(target, '4242.json');
+      writeFileSync(stale, JSON.stringify({ pid: 4242, at: new Date(now - WATCHER_PRUNE_MS - 1000).toISOString() }));
+      writeFileSync(join(target, `${A}.json`), JSON.stringify({ pid: A, at: new Date(now).toISOString() }));
+      mkdirSync(join(root, '.gossip', 'bridge'), { recursive: true });
+      symlinkSync(target, watchersDirFor(root));
+      writeWatcherHeartbeat(root, now, B);
+      expect(existsSync(join(target, `${B}.json`))).toBe(false);
+      expect(readWatcherHeartbeats(root, now)).toEqual([]);
+      expect(existsSync(stale)).toBe(true);
+      clearWatcherHeartbeat(root, 0, now, A);
+      expect(existsSync(join(target, `${A}.json`))).toBe(true);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 });

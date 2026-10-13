@@ -4,7 +4,9 @@
  * Each blocked watcher rewrites its OWN per-consumer file
  * `<root>/.gossip/bridge/watchers/<pid>.json` ({pid, at}, file 0600, dir 0700,
  * atomic) every few seconds, so two sessions' watchers never overwrite each
- * other. The relay reads the set to tell the dashboard truthfully whether a
+ * other. The watchers dir is used only when it is a real directory (not a
+ * symlink) owned by the current user; readers touch only heartbeat-format
+ * names. The relay reads the set to tell the dashboard truthfully whether a
  * Claude session is currently listening on the durable inbox (see
  * claude-inbox.ts), and how many are (`listeners`) — instead of inferring it
  * from the dashboard's own SSE connection. Readers prune per-consumer files
@@ -18,7 +20,7 @@
  * printed and will restart the watcher".
  */
 
-import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite0600, isCanonicalIso, readJsonBounded } from './claude-inbox-io';
 
@@ -27,9 +29,14 @@ export const WATCHER_FRESH_MS = 30_000;
 
 /** Per-consumer heartbeat files older than this are deleted by readers. */
 export const WATCHER_PRUNE_MS = 60 * 60 * 1000;
-/** Max per-consumer heartbeat files one read inspects. */
+/** Max per-consumer heartbeat files one read parses (freshest by mtime first). */
 export const WATCHER_SCAN_MAX = 64;
+/** Max heartbeat-format entries one read stats (to sort by mtime and prune stale ones). */
+export const WATCHER_STAT_MAX = 1024;
 const WATCHER_FILE_RE = /^([1-9]\d{0,9})\.json$/;
+/** atomicWrite0600's tmp of a heartbeat: `<pid>.json.<writer pid>.<hex>.tmp`. */
+const WATCHER_TMP_RE = /^[1-9]\d{0,9}\.json\.\d{1,10}\.[0-9a-f]{1,32}\.tmp$/;
+const TMP_STALE_MS = 60_000;
 
 /** LEGACY single watcher-heartbeat path (read-only fallback for one release). */
 export function watcherHeartbeatPathFor(projectRoot: string): string {
@@ -59,9 +66,25 @@ export interface WatcherHeartbeat {
   at: string;
 }
 
+/**
+ * True when `dir` is a real directory (lstat: not a symlink) owned by the
+ * current uid (uid check skipped where the platform has none).
+ */
+function isSafeWatchersDir(dir: string): boolean {
+  try {
+    const st = lstatSync(dir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    return typeof process.getuid !== 'function' || st.uid === process.getuid();
+  } catch {
+    return false;
+  }
+}
+
+/** Write this watcher's heartbeat; silently skipped when the watchers dir is unsafe (isSafeWatchersDir). */
 export function writeWatcherHeartbeat(projectRoot: string, now: number = Date.now(), pid: number = process.pid): void {
   const dir = watchersDirFor(projectRoot);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!isSafeWatchersDir(dir)) return;
   // mkdirSync's mode is masked by umask and ignored for pre-existing dirs.
   try { chmodSync(dir, 0o700); } catch { /* best effort */ }
   atomicWrite0600(watcherConsumerPathFor(projectRoot, pid), JSON.stringify({ pid, at: new Date(now).toISOString() }));
@@ -81,7 +104,9 @@ export function clearWatcherHeartbeat(
       pid, at: new Date(now).toISOString(), code: exitCode,
     }));
   } catch { /* best effort */ }
-  try { unlinkSync(watcherConsumerPathFor(projectRoot, pid)); } catch { /* already gone */ }
+  if (isSafeWatchersDir(watchersDirFor(projectRoot))) {
+    try { unlinkSync(watcherConsumerPathFor(projectRoot, pid)); } catch { /* already gone */ }
+  }
   try {
     const legacy = readPidAt(watcherHeartbeatPathFor(projectRoot));
     if (legacy && legacy.pid === pid) unlinkSync(watcherHeartbeatPathFor(projectRoot));
@@ -98,29 +123,38 @@ function readPidAt(path: string): WatcherHeartbeat | null {
 }
 
 /**
- * All watcher heartbeats: per-consumer files (at most WATCHER_SCAN_MAX read;
- * a file whose pid does not match its name is ignored) plus the legacy single
- * file. Per-consumer files older than WATCHER_PRUNE_MS — and their stale tmp
- * files — are deleted on the way (bounded by the same scan).
+ * All watcher heartbeats: per-consumer files plus the legacy single file.
+ * Only heartbeat-format names are considered (`<pid>.json` and its atomic-write
+ * tmp); at most WATCHER_STAT_MAX are stat'ed, and the WATCHER_SCAN_MAX freshest
+ * by mtime are parsed, so a live watcher is never hidden behind stale entries.
+ * A file whose pid does not match its name is ignored. Heartbeats older than
+ * WATCHER_PRUNE_MS and tmp files older than a minute are deleted on the way.
+ * An unsafe watchers dir (symlink / not ours) is skipped entirely.
  */
 export function readWatcherHeartbeats(projectRoot: string, now: number = Date.now()): WatcherHeartbeat[] {
   const out: WatcherHeartbeat[] = [];
   const dir = watchersDirFor(projectRoot);
   let names: string[] = [];
-  try { names = readdirSync(dir); } catch { /* none yet */ }
-  let scanned = 0;
+  if (isSafeWatchersDir(dir)) {
+    try { names = readdirSync(dir); } catch { /* none yet */ }
+  }
+  const files: { name: string; path: string; mtime: number }[] = [];
   for (const name of names) {
-    if (scanned >= WATCHER_SCAN_MAX) break;
-    const m = WATCHER_FILE_RE.exec(name);
-    if (!m) {
-      if (name.endsWith('.tmp')) { scanned++; pruneIfOlder(join(dir, name), now, 60_000); }
-      continue;
-    }
-    scanned++;
+    if (files.length >= WATCHER_STAT_MAX) break;
+    const tmp = WATCHER_TMP_RE.test(name);
+    if (!tmp && !WATCHER_FILE_RE.test(name)) continue;
     const path = join(dir, name);
+    const mtime = fileMtime(path);
+    if (mtime === null) continue;
+    if (tmp) { if (now - mtime > TMP_STALE_MS) unlinkQuiet(path); continue; }
+    if (now - mtime > WATCHER_PRUNE_MS) { unlinkQuiet(path); continue; }
+    files.push({ name, path, mtime });
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  for (const { name, path } of files.slice(0, WATCHER_SCAN_MAX)) {
     const hb = readPidAt(path);
-    if (!hb || hb.pid !== Number(m[1])) { pruneIfOlder(path, now, WATCHER_PRUNE_MS); continue; }
-    if (now - Date.parse(hb.at) > WATCHER_PRUNE_MS) { try { unlinkSync(path); } catch { /* gone */ } continue; }
+    if (!hb || hb.pid !== Number(WATCHER_FILE_RE.exec(name)?.[1])) continue; // stale ones were pruned by mtime above
+    if (now - Date.parse(hb.at) > WATCHER_PRUNE_MS) { unlinkQuiet(path); continue; }
     out.push(hb);
   }
   const legacy = readPidAt(watcherHeartbeatPathFor(projectRoot));
@@ -128,10 +162,18 @@ export function readWatcherHeartbeats(projectRoot: string, now: number = Date.no
   return out;
 }
 
-function pruneIfOlder(path: string, now: number, ageMs: number): void {
+/** mtime of a regular file (lstat: symlinks are not followed), else null. */
+function fileMtime(path: string): number | null {
   try {
-    if (now - statSync(path).mtimeMs > ageMs) unlinkSync(path);
-  } catch { /* gone */ }
+    const st = lstatSync(path);
+    return st.isFile() ? st.mtimeMs : null;
+  } catch {
+    return null;
+  }
+}
+
+function unlinkQuiet(path: string): void {
+  try { unlinkSync(path); } catch { /* gone */ }
 }
 
 /** The freshest watcher heartbeat (any consumer, or the legacy file), or null. */

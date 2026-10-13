@@ -10,7 +10,7 @@ import { tmpdir } from 'os';
 import { ClaudeInbox, inboxDirFor } from '@gossip/relay/dashboard/claude-inbox';
 import { runInboxCommand } from '../../apps/cli/src/inbox-command';
 import {
-  CHANNEL_GRACE_MS, claimQueued, claimUnanswered, INBOX_MAX_REMINDERS, renderPromptHookInjection, UNANSWERED_GRACE_MS,
+  CHANNEL_GRACE_MS, claimQueued, claimUnanswered, INBOX_MAX_REMINDERS, limitNote, renderPromptHookInjection, UNANSWERED_GRACE_MS,
 } from '../../apps/cli/src/inbox-format';
 
 let root: string;
@@ -104,19 +104,36 @@ describe('watcher idle recovery', () => {
     expect(inbox.get(e.id)?.reminded_count).toBe(2);
   });
 
-  it('claimReminder: a reminder that lands between read and rename wins; the loser backs off', () => {
+  it('the final reminder carries the limit note, exactly once', async () => {
     const t0 = Date.now();
-    const e = inbox.append('c', 'race', t0);
-    inbox.mark(e.id, 'delivered', 'wait');
-    writeFileSync(join(inbox.directory, `${e.id}.reminded`), JSON.stringify({ at: iso(t0), count: 1 }));
-    const other = new ClaudeInbox(inboxDirFor(root));
-    const now = t0 + UNANSWERED_GRACE_MS + 1000;
-    const got = inbox.claimReminder(e.id, now, () => {
-      expect(other.claimReminder(e.id, now + 5, () => true)).toBe(2); // the concurrent consumer
-      return true;
-    });
-    expect(got).toBeNull();
-    expect(JSON.parse(readFileSync(join(inbox.directory, `${e.id}.reminded`), 'utf-8'))).toEqual({ at: iso(now + 5), count: 2 });
+    const e = inbox.append('c', 'nag to the limit', t0);
+    claimQueued(inbox, 10, 'wait');
+    let t = t0;
+    const texts: string[] = [];
+    for (let i = 0; i < INBOX_MAX_REMINDERS; i++) {
+      t += UNANSWERED_GRACE_MS + 1000;
+      texts.push(i % 2 === 0 ? (await wait(t)).text : renderPromptHookInjection(root, {}, t));
+    }
+    const note = limitNote(e.id);
+    expect(texts.slice(0, -1).every((x) => !x.includes(note))).toBe(true);
+    expect(texts[texts.length - 1]).toContain(note);
+    t += UNANSWERED_GRACE_MS + 1000;
+    expect(renderPromptHookInjection(root, {}, t)).toBe('');
+    expect((await wait(t)).code).toBe(2);
+  });
+
+  it('the hook path shows the limit note on the final reminder', () => {
+    const t0 = Date.now();
+    const e = inbox.append('c', 'hook limit', t0);
+    claimQueued(inbox, 10, 'wait');
+    let t = t0;
+    let last = '';
+    for (let i = 0; i < INBOX_MAX_REMINDERS; i++) {
+      t += UNANSWERED_GRACE_MS + 1000;
+      last = renderPromptHookInjection(root, {}, t);
+      if (i < INBOX_MAX_REMINDERS - 1) expect(last).not.toContain('reminder limit reached');
+    }
+    expect(last).toContain(limitNote(e.id));
   });
 
   it('channel mode: does not re-surface mail received within the channel grace', async () => {

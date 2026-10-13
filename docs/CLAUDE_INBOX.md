@@ -24,8 +24,11 @@ relay persists every Claude-addressed message before it tries delivery:
                                   consumer = wait:<pid> | hook:<pid> (absent on older markers)
   <id>.answered                  marker {at, via}: `gossip_chat_reply` closed it (via `in_reply_to`, or it was
                                   already delivered); via `expired` = agent mail past its 24 h TTL
-  <id>.reminded                  {at, count}: last time a hook or the watcher re-surfaced it as
-                                  unanswered, and how often (a marker without count counts as 1)
+  <id>.expired                   tag {at}: closed by the agent-mail TTL (counted as `stats.expired`)
+  <id>.reminded.<n>              {at}: the n-th time (1..6) a hook or the watcher re-surfaced it
+                                  as unanswered; created once with O_EXCL, never rewritten
+  <id>.reminded                  legacy {at, count} reminder marker (a marker without count
+                                  counts as 1); still read, never written
   <id>.quarantine                an oversized record, moved aside unread
 .gossip/bridge/watchers/<pid>.json       per-watcher heartbeat {pid, at} while `inbox wait` is
                                   blocked (dir 0700, file 0600)
@@ -50,7 +53,10 @@ Limits:
   `gossipcat inbox ack <id> --answered`.
 - **Answered** messages are kept for 7 days, at most 200 of them (oldest
   first). The prune count and time are reported in the inbox status endpoint
-  (`stats.pruned_total`, `stats.last_pruned_at`).
+  (`stats.pruned_total`, `stats.last_pruned_at`; `stats.expired` counts the
+  retained answered records closed by the agent-mail TTL).
+- Temp files of atomic writes (`*.tmp`) are deleted once their own mtime is
+  over a minute old, never by the message's age.
 - Received timestamps must be canonical ISO-8601 (`…T…:…:….sssZ`); records
   with anything else are ignored. Record files over 256 KiB are quarantined
   without being read. One scan reads at most 1000 records, and lookups stop
@@ -86,18 +92,25 @@ messages.
 
 Each message is shown at most once every 10 minutes across all consumers,
 until a `gossip_chat_reply` closes it or `gossipcat inbox ack <id> --answered`
-closes it. `<id>.reminded` tracks the time and count. A hook and a watcher
-cannot both claim the same 10-minute window: the first reminder is an
-`O_EXCL` create, and later ones rename the marker away so only one consumer
-wins.
+closes it. Reminder n is the file `<id>.reminded.<n>`; the count is the
+highest n present, and its `{at}` is the time of the last reminder. Claiming
+reminder n+1 is one `O_EXCL` create of `<id>.reminded.<n+1>`, so a hook and a
+watcher cannot both claim the same 10-minute window, and the count never goes
+down or resets. A legacy `<id>.reminded` marker still counts; new reminders
+continue above its count. All reminder files are removed with their record.
 
-After 6 reminders a message is no longer re-surfaced automatically. It stays
-`delivered` (unanswered) on the dashboard and in `gossipcat inbox list`. In
+After 6 reminders a message is no longer re-surfaced automatically. The output
+that carries the 6th reminder says so once ("reminder limit reached for <id>;
+it stays visible in `gossipcat inbox list`"). The message stays `delivered`
+(unanswered) on the dashboard and in `gossipcat inbox list`. A reminder is
+claimed before it is printed, so a watcher killed in between uses one up. In
 confirmed channel mode the watcher also leaves alone mail received less than
 2 minutes ago. A message may be shown twice; it is not lost.
 
 Other commands: `gossipcat inbox list [--json] [--queued]`, `inbox show <id>`
 (read-only), `inbox ack <id> [--answered]`. None of them start the MCP server.
+`inbox list --json` adds `outcome` to answered entries: `expired` when the
+agent-mail TTL closed it, otherwise `answered`. `status` keeps its values.
 
 ### Addressing (record envelope)
 
@@ -138,12 +151,15 @@ Agents and the orchestrator exchange short notes through the same store.
   200-unanswered cap. Those slots stay free for dashboard messages from the
   human. Over-quota agent messages are dropped and logged; the task itself is
   not affected.
-- **TTL.** Agent → orchestrator and orchestrator → agent mail still unanswered
-  after 24 hours is closed as `answered` with `via: expired`. The prune pass
+- **TTL.** Agent → orchestrator and orchestrator → agent mail is closed as
+  `answered` with `via: expired` when it is still unanswered and its last
+  activity (received, delivered or last reminded) is more than 24 hours old.
+  Mail that waited a day for a session but was just delivered does not expire. The prune pass
   does this whenever it runs (on every append and when `inbox wait` starts), so
   there are no extra timers. Expired mail no longer counts toward the quotas or
   the 200 cap, and is no longer delivered or re-surfaced. `inbox list` shows it
-  as `expired`, and the count goes to `expired_agent_mail` in
+  as `expired` (`outcome: "expired"` in `--json`), it gets an `<id>.expired`
+  tag counted in `stats.expired`, and the count goes to `expired_agent_mail` in
   `inbox-prune.json`. Dashboard messages from the human never expire.
 - **Orchestrator → agent.** `gossip_inbox_send(to, text, kind?, ref?, in_reply_to?)`
   queues a note for a configured agent. It is orchestrator-only and must never
@@ -232,9 +248,13 @@ per-message status and a link state:
 
 Each watcher writes its own `watchers/<pid>.json`, so two sessions listening
 at once don't overwrite each other. The link carries `listeners`, the number
-of live watchers, whenever the relay knows the project root. Heartbeat files
-older than an hour are deleted when the relay reads them (at most 64 files per
-read).
+of live watchers, whenever the relay knows the project root. Readers only
+look at heartbeat names (`<pid>.json` and its atomic-write tmp), sort them by
+mtime, newest first, and parse at most 64, so stale files can't hide a live
+watcher. Heartbeat files older than an hour, and tmp files older than a minute,
+are deleted when the relay reads them. Nothing is written, read or deleted
+through `watchers/` when it is a symlink or not a directory owned by the
+current user.
 
 `gossipcat inbox wait` deletes its own heartbeat when it exits, so it never
 shows as `listening` after exiting. Other watchers are not affected. It also

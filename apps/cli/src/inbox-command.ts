@@ -60,6 +60,12 @@ function parseNonNegInt(raw: string | undefined, fallback: number): number | nul
   return Number(raw);
 }
 
+/** 'expired' | 'answered' for answered entries (agent-mail TTL vs a real close), else undefined. */
+function outcomeOf(status: string, answeredVia: string | undefined): 'answered' | 'expired' | undefined {
+  if (status !== 'answered') return undefined;
+  return answeredVia === 'expired' ? 'expired' : 'answered';
+}
+
 export async function runInboxCommand(argv: string[], io: InboxIo): Promise<number> {
   const sub = argv[0];
   const args = argv.slice(1);
@@ -78,13 +84,14 @@ export async function runInboxCommand(argv: string[], io: InboxIo): Promise<numb
         if (args.includes('--queued')) entries = entries.filter((e) => e.status === 'queued');
         if (args.includes('--json')) {
           // JSON.stringify escapes control chars, so raw content is terminal-safe here.
+          // `outcome` (answered entries only) tells a reply from an agent-mail expiry; `status` is unchanged.
           io.out(JSON.stringify(entries.map(({ id, chat_id, status, received_at, delivered_via, delivered_at, answered_via, reminded_count }) =>
-            ({ id, chat_id, status, received_at, delivered_via, delivered_at, answered_via, reminded_count })), null, 2) + '\n');
+            ({ id, chat_id, status, outcome: outcomeOf(status, answered_via), received_at, delivered_via, delivered_at, answered_via, reminded_count })), null, 2) + '\n');
           return 0;
         }
         if (entries.length === 0) { io.out('[gossipcat inbox] empty\n'); return 0; }
         for (const e of entries) {
-          const status = e.status === 'answered' && e.answered_via === 'expired' ? 'expired' : e.status;
+          const status = outcomeOf(e.status, e.answered_via) ?? e.status;
           io.out(`${e.id}  ${status.padEnd(9)}  chat=${e.chat_id}  ${e.received_at}  ${previewLine(e.content)}\n`);
         }
         return 0;
