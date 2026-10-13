@@ -499,8 +499,8 @@ export class RelayServer {
    * stream), 'queued' (no stream open — parked and flushed once when one
    * opens), or 'rejected' (dashboard disabled, unbound/malformed chat_id).
    */
-  emitBridgeReplyStatus(chatId: string, text: string): 'delivered' | 'queued' | 'rejected' {
-    return this.dashboardRouter?.emitBridgeReplyStatus(chatId, text) ?? 'rejected';
+  emitBridgeReplyStatus(chatId: string, text: string, inReplyTo?: readonly string[]): 'delivered' | 'queued' | 'rejected' {
+    return this.dashboardRouter?.emitBridgeReplyStatus(chatId, text, inReplyTo) ?? 'rejected';
   }
 
   /**

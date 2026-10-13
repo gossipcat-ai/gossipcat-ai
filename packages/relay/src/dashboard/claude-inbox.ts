@@ -160,12 +160,30 @@ export class ClaudeInbox {
     try { atomicWrite0600(join(this.dir, `${id}.reminded`), JSON.stringify({ at: new Date(now).toISOString() })); } catch { /* best effort */ }
   }
 
-  /** Mark every not-yet-answered entry of `chatId` received at/before now as answered. */
-  markAnsweredForChat(chatId: string, now: number = Date.now()): number {
+  /**
+   * Close the entries a `reply` answered. With `ids`: exactly those ids, and
+   * only when they belong to `chatId` (unknown / other-chat ids are ignored);
+   * a still-`queued` id Claude explicitly named is marked delivered(via
+   * 'reply') first. Without `ids` (legacy / channel-mode reply): only entries
+   * of the chat that were already `delivered` (shown to Claude) and received
+   * at/before `now` — a `queued` entry was never shown, so it is NEVER closed
+   * here (duplicates are acceptable, losses are not).
+   */
+  markAnswered(chatId: string, opts: { ids?: readonly string[]; now?: number } = {}): number {
+    const now = opts.now ?? Date.now();
     let n = 0;
-    for (const e of this.list({ chatId, status: ['queued', 'delivered'] })) {
+    if (opts.ids !== undefined) {
+      for (const id of new Set(opts.ids)) {
+        if (typeof id !== 'string' || !INBOX_ID_RE.test(id)) continue;
+        const e = this.get(id);
+        if (!e || e.chat_id !== chatId || e.status === 'answered') continue;
+        if (e.status === 'queued') this.mark(e.id, 'delivered', 'reply');
+        if (this.mark(e.id, 'answered', 'reply')) n++;
+      }
+      return n;
+    }
+    for (const e of this.list({ chatId, status: ['delivered'] })) {
       if (Date.parse(e.received_at) > now) continue;
-      if (e.status === 'queued') this.mark(e.id, 'delivered', 'reply');
       if (this.mark(e.id, 'answered', 'reply')) n++;
     }
     return n;

@@ -20,7 +20,7 @@ relay persists every Claude-addressed message before it tries delivery:
 .gossip/bridge/inbox/            dir 0700
   <id>.json                      {id, chat_id, content, received_at}  file 0600, written once
   <id>.delivered                 marker {at, via}: wait | hook | ack | reply
-  <id>.answered                  marker: `reply` was called for that chat_id
+  <id>.answered                  marker: `reply` closed it (via `in_reply_to`, or it was already delivered)
   <id>.reminded                  {at}: last time a hook re-surfaced it as unanswered
   <id>.quarantine                an oversized record, moved aside unread
 .gossip/bridge/inbox-watcher.json        heartbeat {pid, at} while `inbox wait` is blocked
@@ -73,7 +73,7 @@ between: the watcher may be killed, or its output may never reach Claude. So
 the SessionStart and UserPromptSubmit hooks also re-surface messages that are
 `delivered` but not `answered` more than 10 minutes after delivery. They are
 labelled `[unanswered …]`, shown at most once every 10 minutes (tracked by
-`<id>.reminded`), until `reply` answers the chat or
+`<id>.reminded`), until a `reply` closes them or
 `gossipcat inbox ack <id> --answered` closes them. A message may be shown
 twice; it is not lost.
 
@@ -91,7 +91,9 @@ Neither the sink result nor `GOSSIPCAT_CHANNEL_ACTIVE=1` proves Claude saw it.
 So a message stays `queued` until one of these happens:
 
 - `inbox wait`, a hook, or `inbox ack` claims it (`delivered`)
-- `reply` answers its chat (`answered`)
+- `reply` closes it (`answered`): with `in_reply_to` naming its id, or, without
+  `in_reply_to`, only if it was already `delivered`. A still-`queued` message is
+  never closed by a reply that does not name it.
 
 In channel mode (`GOSSIPCAT_CHANNEL_ACTIVE=1`, set by `gossipcat code`) the
 message usually also arrives as a channel turn. The hooks leave a queued
@@ -143,7 +145,7 @@ as `listening` after exiting. It also writes `inbox-watcher-exit.json`, which
 is what the `recent` state is based on.
 
 `reply` can still find a chat whose message is in the inbox after an MCP or
-relay restart. It marks that chat's entries `answered`. If no dashboard stream
+relay restart. With `in_reply_to` (one inbox id or an array; ids from other chats are ignored) it marks exactly those entries `answered`; without it, only that chat's already-`delivered` entries. If no dashboard stream
 for that chat is open, the reply is stored in `.gossip/bridge/outbox/` (at most
 20 replies per chat, 64 chats, 24 hours) and the tool reports "queued for
 delivery". The stored replies are sent once, when a stream for that chat opens.

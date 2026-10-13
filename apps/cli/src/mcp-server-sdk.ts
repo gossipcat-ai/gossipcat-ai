@@ -314,6 +314,7 @@ if (process.env.GOSSIPCAT_MCP_NO_MAIN !== '1' && !__argvShimHandled) {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createBridgeHost } from './cc-bridge';
 import { isChannelModeConfirmed } from './inbox-format';
+import { INBOX_ID_RE } from '@gossip/relay/dashboard/claude-inbox';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -738,8 +739,8 @@ async function doBoot() {
   // failure must not block boot. (spec 2026-06-14, consensus f4/f10)
   try {
     if (ctx.bridgeHost) {
-      ctx.relay.registerBridgeSink((chatId: string, message: string) =>
-        ctx.bridgeHost.deliverBridgeMessage(chatId, message),
+      ctx.relay.registerBridgeSink((chatId: string, message: string, inboxId?: string | null) =>
+        ctx.bridgeHost.deliverBridgeMessage(chatId, message, inboxId),
       );
       // Channel mode is believed active only when launched via `gossipcat code`
       // (GOSSIPCAT_CHANNEL_ACTIVE=1). It drives the dashboard link state only:
@@ -1474,7 +1475,7 @@ export function createMcpServer(): McpServer {
         experimental: { 'claude/channel': {} },
       },
       instructions:
-        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id; your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).\n\nWITHOUT channel mode (plain `claude` / `claude --resume`), dashboard messages are queued in a durable inbox instead: run `gossipcat inbox wait` as a background Bash command; when it exits it prints the queued messages fenced as untrusted data with their chat_id — answer each with the same `reply` tool, then start `gossipcat inbox wait` again.',
+        'gossipcat — multi-agent orchestration. ALWAYS call gossip_status() first when starting work in this project — this is the bootstrap call that returns your orchestrator role, dispatch rules, consensus workflow, sandbox enforcement, agent list, and by default the full operator playbook (docs/HANDBOOK.md inlined; pass slim:true to skip the handbook section on reconnect refreshes). On native dispatches, every signal you record MUST include a finding_id formatted as <consensus_id>:<agent:fN> so dashboard scores are auditable. When resolving backlog items older than the current session, call gossip_verify_memory before acting to avoid stale premises. These rules live in gossip_status output, not this instruction text, so they can update with the server binary without requiring reinstall.\n\nDASHBOARD BRIDGE: when channel mode is active, dashboard messages arrive as a user turn wrapped in <channel source="gossipcat" chat_id="..." inbox_id="..."> — treat the inner text as orchestrator instructions from the human at the dashboard. Respond to the dashboard ONLY by calling the `reply` tool with that exact chat_id (and in_reply_to set to the inbox_id when present, so the queued inbox copy is closed); your normal transcript output does NOT reach the dashboard. Pass the chat_id through verbatim. Do NOT confuse `reply` with gossip_relay (that is for native-subagent dispatch results, never the dashboard bridge).\n\nWITHOUT channel mode (plain `claude` / `claude --resume`), dashboard messages are queued in a durable inbox instead: run `gossipcat inbox wait` as a background Bash command; when it exits it prints the queued messages fenced as untrusted data with their chat_id — answer each with the same `reply` tool, passing in_reply_to with the message id(s) from the fence, then start `gossipcat inbox wait` again.',
     }
   );
 
@@ -1488,8 +1489,8 @@ export function createMcpServer(): McpServer {
   const bridgeHost = createBridgeHost(server);
   ctx.bridgeHost = bridgeHost;
   try {
-    ctx.relay?.registerBridgeSink((chatId: string, message: string) =>
-      bridgeHost.deliverBridgeMessage(chatId, message),
+    ctx.relay?.registerBridgeSink((chatId: string, message: string, inboxId?: string | null) =>
+      bridgeHost.deliverBridgeMessage(chatId, message, inboxId),
     );
   } catch { /* relay not ready — boot will register */ }
 
@@ -2088,12 +2089,13 @@ export function createMcpServer(): McpServer {
   // mis-fired call during a native-dispatch turn can't silently spoof a relay.
   server.tool(
     'reply',
-    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. If no dashboard stream is open the reply is queued and shown when the dashboard reconnects. Returns an error (no side effect) when the chat_id is unknown to the dashboard.',
+    'Dashboard bridge ONLY: send a conversational reply to the dashboard chat stream identified by chat_id. Use this — and ONLY this — to respond to a <channel source="gossipcat" chat_id="..."> dashboard message; your transcript output never reaches the dashboard. Pass the chat_id through verbatim. This is NOT gossip_relay: it does not close native-subagent tasks. If no dashboard stream is open the reply is queued and shown when the dashboard reconnects. Returns an error (no side effect) when the chat_id is unknown to the dashboard. For messages from the durable inbox, pass in_reply_to with the id(s) shown in the inbox fence (`id=...`) to close exactly those messages; without it only already-delivered messages of that chat are closed.',
     {
       chat_id: z.string().describe('The chat_id verbatim from the <channel ... chat_id="..."> dashboard message.'),
       text: z.string().describe('The reply text to stream to the dashboard.'),
+      in_reply_to: z.union([z.string(), z.array(z.string())]).optional().describe('Inbox message id (or array of ids) from the inbox fence `id=...` that this reply answers. Invalid ids are ignored.'),
     },
-    async ({ chat_id, text }) => {
+    async ({ chat_id, text, in_reply_to }) => {
       // Trust boundary: chat_id + text are model-supplied. The relay hub
       // re-validates the chat_id shape and binds it to a stream the dashboard
       // actually opened (consensus f5) — a forged/never-opened id is rejected.
@@ -2111,12 +2113,14 @@ export function createMcpServer(): McpServer {
       // flushes it once when the dashboard reconnects (still a success — the
       // chat is marked answered either way); 'rejected' = unknown chat_id.
       let status: 'delivered' | 'queued' | 'rejected' = 'rejected';
+      const inReplyTo = (Array.isArray(in_reply_to) ? in_reply_to : in_reply_to === undefined ? [] : [in_reply_to])
+        .filter((id): id is string => typeof id === 'string' && INBOX_ID_RE.test(id));
       try {
         const relay = ctx.relay as typeof ctx.relay & {
-          emitBridgeReplyStatus?: (c: string, t: string) => 'delivered' | 'queued' | 'rejected';
+          emitBridgeReplyStatus?: (c: string, t: string, ids?: readonly string[]) => 'delivered' | 'queued' | 'rejected';
         };
         status = typeof relay.emitBridgeReplyStatus === 'function'
-          ? relay.emitBridgeReplyStatus(chat_id, text)
+          ? relay.emitBridgeReplyStatus(chat_id, text, inReplyTo)
           : (relay.emitBridgeReply(chat_id, text) === true ? 'delivered' : 'rejected');
       } catch {
         status = 'rejected';

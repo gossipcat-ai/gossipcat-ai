@@ -56,7 +56,9 @@ describe('BridgeHub with durable inbox', () => {
     const sink = jest.fn(() => true);
     hub.registerSink(sink);
     const r = hub.handlePost({ chat_id: 'chat-a', message: 'm' });
-    expect(sink).toHaveBeenCalledWith('chat-a', 'm');
+    // The sink also gets the durable-inbox id so the channel turn can carry it
+    // (reply in_reply_to closes the queued copy).
+    expect(sink).toHaveBeenCalledWith('chat-a', 'm', inbox.queued()[0].id);
     expect(r.payload).toMatchObject({ delivery: 'queued' });
     expect(inbox.queued()).toHaveLength(1);
   });
@@ -70,7 +72,7 @@ describe('BridgeHub with durable inbox', () => {
     expect(r.payload).toMatchObject({ delivery: 'queued', live: true });
     expect(inbox.queued()).toHaveLength(1);
     hub.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-a'), mockRes());
-    expect(hub.emitReply('chat-a', 'done')).toBe(true);
+    expect(hub.emitReplyStatus('chat-a', 'done', [inbox.list()[0].id])).toBe('delivered');
     expect(inbox.list()[0].status).toBe('answered');
   });
 
@@ -90,7 +92,8 @@ describe('BridgeHub with durable inbox', () => {
   it('reply with NO open stream is queued, marked answered, and flushed exactly once on stream open (I2)', () => {
     const hub = new BridgeHub({ projectRoot: root });
     hub.handlePost({ chat_id: 'chat-a', message: 'question' });
-    expect(hub.emitReplyStatus('chat-a', 'the answer')).toBe('queued');
+    const qid = inbox.list()[0].id;
+    expect(hub.emitReplyStatus('chat-a', 'the answer', [qid])).toBe('queued');
     expect(inbox.list()[0].status).toBe('answered');
     expect(hub.inboxSnapshot('chat-a').payload.pending_replies).toBe(1);
 
@@ -111,6 +114,24 @@ describe('BridgeHub with durable inbox', () => {
     expect(again.filter((w) => w.includes('the answer'))).toHaveLength(0);
     // With a stream open, a reply is delivered live.
     expect(hub2.emitReplyStatus('chat-a', 'live one')).toBe('delivered');
+  });
+
+  it('a reply without in_reply_to leaves a still-queued message queued (no silent loss)', () => {
+    const hub = new BridgeHub({ projectRoot: root });
+    hub.handlePost({ chat_id: 'chat-a', message: 'never shown' });
+    expect(hub.emitReplyStatus('chat-a', 'reply to something earlier')).toBe('queued');
+    expect(inbox.list()[0].status).toBe('queued');
+  });
+
+  it('an empty in_reply_to list (what the MCP tool sends when omitted) is a legacy reply: closes delivered, keeps queued', () => {
+    const hub = new BridgeHub({ projectRoot: root });
+    hub.handlePost({ chat_id: 'chat-a', message: 'shown' });
+    const shownId = inbox.list()[0].id;
+    inbox.mark(shownId, 'delivered', 'wait');
+    hub.handlePost({ chat_id: 'chat-a', message: 'not shown yet' });
+    hub.emitReplyStatus('chat-a', 'answer', []);
+    const byText = Object.fromEntries(inbox.list().map((e) => [e.content, e.status]));
+    expect(byText).toEqual({ shown: 'answered', 'not shown yet': 'queued' });
   });
 
   it('a stream for ANOTHER chat does not swallow the reply — it is queued for its own chat', () => {
@@ -138,7 +159,7 @@ describe('BridgeHub with durable inbox', () => {
     // Simulated MCP/relay restart: fresh hub, empty in-memory knownChatIds.
     const hub2 = new BridgeHub({ projectRoot: root });
     hub2.handleStream(mockReq('/dashboard/api/bridge/stream?chat_id=chat-a'), mockRes());
-    expect(hub2.emitReply('chat-a', 'done')).toBe(true);
+    expect(hub2.emitReplyStatus('chat-a', 'done', [inbox.list()[0].id])).toBe('delivered');
     expect(inbox.list()[0].status).toBe('answered');
     // A never-persisted id is still rejected.
     expect(hub2.emitReply('forged-id', 'x')).toBe(false);

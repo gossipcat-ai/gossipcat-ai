@@ -37,6 +37,8 @@ const BUFFER_TTL_MS = 2 * 60 * 60 * 1000; // 2h idle, same as chat-session-store
 interface BufferedMessage {
   chatId: string;
   content: string;
+  /** Durable-inbox id, surfaced as channel meta so `reply` can pass it as in_reply_to. */
+  inboxId?: string | null;
   queuedAt: number;
 }
 
@@ -53,7 +55,7 @@ export interface BridgeHost {
    * answers the chat (docs/CLAUDE_INBOX.md). Duplicates are acceptable; losses
    * are not.
    */
-  deliverBridgeMessage(chatId: string, content: string): boolean;
+  deliverBridgeMessage(chatId: string, content: string, inboxId?: string | null): boolean;
   /** Flush any buffered messages — call after the transport connects. */
   flush(): void;
   /** Test/introspection helper. */
@@ -86,7 +88,7 @@ export function createBridgeHost(server: McpServer): BridgeHost {
         notification: (n: { method: string; params?: Record<string, unknown> }) => Promise<void>;
       }).notification({
         method: CC_CHANNEL_NOTIFICATION,
-        params: { content: msg.content, meta: { chat_id: msg.chatId } },
+        params: { content: msg.content, meta: msg.inboxId ? { chat_id: msg.chatId, inbox_id: msg.inboxId } : { chat_id: msg.chatId } },
       }).catch(() => {
         // Send rejected after we optimistically returned — re-buffer so a flush
         // can retry, unless the buffer is already full of fresh entries.
@@ -121,13 +123,13 @@ export function createBridgeHost(server: McpServer): BridgeHost {
     }
   }
 
-  function deliverBridgeMessage(chatId: string, content: string): boolean {
+  function deliverBridgeMessage(chatId: string, content: string, inboxId?: string | null): boolean {
     // Retry any messages re-buffered by a prior async send rejection BEFORE
     // sending the new one, so a transient failure recovers on the next message
     // instead of lingering until TTL expiry (consensus f7e5bc15 f8 — flush was
     // never otherwise triggered). flush() is idempotent + bounded.
     if (buffer.length > 0) flush();
-    const msg: BufferedMessage = { chatId, content, queuedAt: Date.now() };
+    const msg: BufferedMessage = { chatId, content, inboxId, queuedAt: Date.now() };
     return send(msg);
   }
 

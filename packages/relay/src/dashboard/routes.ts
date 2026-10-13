@@ -277,8 +277,8 @@ export class DashboardRouter {
   }
 
   /** Like emitBridgeReply, but says whether the reply was shown live or queued for the next stream. */
-  emitBridgeReplyStatus(chatId: string, text: string): BridgeReplyStatus {
-    return this.bridge.emitReplyStatus(chatId, text);
+  emitBridgeReplyStatus(chatId: string, text: string, inReplyTo?: readonly string[]): BridgeReplyStatus {
+    return this.bridge.emitReplyStatus(chatId, text, inReplyTo);
   }
 
   /**

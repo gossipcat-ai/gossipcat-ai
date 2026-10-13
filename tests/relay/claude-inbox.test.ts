@@ -153,14 +153,44 @@ describe('ClaudeInbox — status transitions', () => {
     expect(inbox.get('../x')).toBeNull();
   });
 
-  it('markAnsweredForChat only touches that chat', () => {
-    const a1 = inbox.append('chatA', 'a1');
-    const b1 = inbox.append('chatB', 'b1');
-    expect(inbox.markAnsweredForChat('chatA')).toBe(1);
+  it('markAnswered (legacy, no ids) closes delivered entries of that chat only', () => {
+    const a1 = inbox.append('chatA', 'a1', 1_700_000_000_001);
+    const b1 = inbox.append('chatB', 'b1', 1_700_000_000_002);
+    inbox.mark(a1.id, 'delivered');
+    inbox.mark(b1.id, 'delivered');
+    expect(inbox.markAnswered('chatA')).toBe(1);
     expect(inbox.get(a1.id)?.status).toBe('answered');
-    expect(inbox.get(b1.id)?.status).toBe('queued');
+    expect(inbox.get(b1.id)?.status).toBe('delivered');
     expect(inbox.hasChatId('chatA')).toBe(true);
     expect(inbox.hasChatId('nope')).toBe(false);
+  });
+
+  it('legacy reply closes delivered A but never a still-queued B in the same chat', () => {
+    const a = inbox.append('chatA', 'a', 1_700_000_000_001);
+    const b = inbox.append('chatA', 'b', 1_700_000_000_002);
+    inbox.mark(a.id, 'delivered');
+    expect(inbox.markAnswered('chatA')).toBe(1);
+    expect(inbox.get(a.id)?.status).toBe('answered');
+    expect(inbox.get(b.id)?.status).toBe('queued');
+  });
+
+  it('in_reply_to closes exactly the named ids, even if queued, and leaves others', () => {
+    const a = inbox.append('chatA', 'a', 1_700_000_000_001);
+    const b = inbox.append('chatA', 'b', 1_700_000_000_002);
+    const c = inbox.append('chatA', 'c', 1_700_000_000_003);
+    inbox.mark(a.id, 'delivered');
+    expect(inbox.markAnswered('chatA', { ids: [b.id] })).toBe(1);
+    expect(inbox.get(b.id)?.status).toBe('answered');
+    expect(inbox.get(a.id)?.status).toBe('delivered');
+    expect(inbox.get(c.id)?.status).toBe('queued');
+  });
+
+  it('in_reply_to ignores ids from another chat, unknown ids and malformed ids', () => {
+    const a = inbox.append('chatA', 'a', 1_700_000_000_001);
+    const b = inbox.append('chatB', 'b', 1_700_000_000_002);
+    expect(inbox.markAnswered('chatA', { ids: [b.id, '0000000000001-aaaaaaaaaaaa', '../x'] })).toBe(0);
+    expect(inbox.get(b.id)?.status).toBe('queued');
+    expect(inbox.get(a.id)?.status).toBe('queued');
   });
 });
 

@@ -48,7 +48,7 @@ type PersistResult = { id: string } | { full: number } | null;
  * is wired (MCP server not booted / not registered) — the router surfaces that
  * to the dashboard rather than silently dropping.
  */
-export type BridgeSink = (chatId: string, message: string) => boolean;
+export type BridgeSink = (chatId: string, message: string, inboxId?: string | null) => boolean;
 
 /** One outbound frame pushed to the dashboard over SSE. */
 interface BridgeReplyFrame {
@@ -496,7 +496,7 @@ export class BridgeHub {
     const sessionId = validateChatId(b.session_id);
     if (sessionId !== null) this.bindSession(sessionId, chatId);
 
-    const delivered = this.callSink(chatId, message);
+    const delivered = this.callSink(chatId, message, inboxId);
     if (!delivered && inboxId === null) {
       return { status: 503, payload: { error: 'Bridge sink rejected the message', chat_id: chatId } };
     }
@@ -504,10 +504,10 @@ export class BridgeHub {
   }
 
   /** Invoke the sink (if any), mapping throws to false. */
-  private callSink(chatId: string, text: string): boolean {
+  private callSink(chatId: string, text: string, inboxId: string | null): boolean {
     if (!this.sink) return false;
     try {
-      return this.sink(chatId, text) === true;
+      return this.sink(chatId, text, inboxId) === true;
     } catch {
       return false;
     }
@@ -582,10 +582,11 @@ export class BridgeHub {
    * ('delivered'); otherwise it is parked in the bounded reply outbox and
    * flushed once when such a stream opens ('queued') — with the durable inbox
    * Claude routinely answers while the dashboard tab is closed. Either way the
-   * chat's inbox entries are marked answered. 'rejected' = unbound/malformed id
+   * inbox entries named in `inReplyTo` are marked answered (without it, only
+   * the chat's already-delivered entries — never still-queued ones). 'rejected' = unbound/malformed id
    * or the reply could not be stored.
    */
-  emitReplyStatus(rawChatId: string, text: string): BridgeReplyStatus {
+  emitReplyStatus(rawChatId: string, text: string, inReplyTo?: readonly string[]): BridgeReplyStatus {
     const chatId = validateChatId(rawChatId);
     if (chatId === null || typeof text !== 'string') return 'rejected';
     if (!this.isKnownChatId(chatId)) return 'rejected';
@@ -601,7 +602,10 @@ export class BridgeHub {
     }
     // The MCP `reply` tool answered this chat → close out its inbox entries so
     // hooks / `inbox wait` never re-surface them and the dashboard shows it.
-    try { this.inbox?.markAnsweredForChat(chatId); } catch { /* best effort */ }
+    // An empty id list (no / only-invalid in_reply_to) means "legacy reply":
+    // close only already-delivered entries, never queued ones.
+    const ids = inReplyTo && inReplyTo.length > 0 ? inReplyTo : undefined;
+    try { this.inbox?.markAnswered(chatId, { ids }); } catch { /* best effort */ }
     return status;
   }
 
@@ -805,7 +809,7 @@ export class BridgeHub {
     const persisted = this.persistInbound(chatId, turn);
     if (persisted && 'full' in persisted) return this.inboxFullResponse(persisted.full, chatId);
     const inboxId = persisted ? persisted.id : null;
-    const delivered = this.callSink(chatId, turn);
+    const delivered = this.callSink(chatId, turn, inboxId);
     if (!delivered && inboxId === null) {
       return { status: 503, payload: { error: this.sink ? 'Bridge sink rejected the answer' : 'No live Claude Code bridge session is active' } };
     }
