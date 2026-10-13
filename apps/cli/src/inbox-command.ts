@@ -10,7 +10,8 @@
  *       exit 3 if orphaned (parent died). Writes a heartbeat while blocked so
  *       the dashboard can show "listening", and a last-exit record on exit so
  *       it can show "recent". A printed message that is never answered is
- *       re-surfaced by the hooks after a grace period (inbox-format.ts).
+ *       re-surfaced — by the hooks, and by this watcher while idle — after a
+ *       grace period, at most INBOX_MAX_REMINDERS times (inbox-format.ts).
  *   inbox list [--json] [--queued]    one sanitized line per entry
  *   inbox show <id>                    fenced full content (read-only)
  *   inbox ack <id> [--answered]        mark delivered (or answered)
@@ -22,8 +23,8 @@ import { mkdirSync, watch, type FSWatcher } from 'fs';
 import { INBOX_ID_RE } from '@gossip/relay/dashboard/claude-inbox';
 import { clearWatcherHeartbeat, writeWatcherHeartbeat } from '@gossip/relay/dashboard/claude-inbox-watcher';
 import {
-  claimQueued, fenceMessage, findProjectRoot, openInbox, previewLine, renderBatch,
-  renderSessionStartInjection, RESTART_WATCHER_HINT,
+  claimQueued, claimUnanswered, fenceMessage, findProjectRoot, isChannelModeConfirmed, openInbox, previewLine,
+  renderBatch, renderSessionStartInjection, RESTART_WATCHER_HINT,
 } from './inbox-format';
 
 export interface InboxIo {
@@ -35,12 +36,18 @@ export interface InboxIo {
   pollMs?: number;
   /** Heartbeat interval override (tests). */
   heartbeatMs?: number;
+  /** Clock override (tests). */
+  now?: () => number;
+  /** Environment override (tests); decides channel mode. */
+  env?: NodeJS.ProcessEnv;
 }
 
 const USAGE =
   'Usage: gossipcat inbox wait [--timeout <sec>] [--max <n>] | list [--json] [--queued] | show <id> | ack <id> [--answered]\n';
 const DEFAULT_TIMEOUT_SEC = 3600;
 const DEFAULT_MAX = 10;
+/** How often a blocked watcher looks for unanswered messages due for a reminder. */
+const RESURFACE_CHECK_MS = 30_000;
 
 function flagValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -51,6 +58,12 @@ function parseNonNegInt(raw: string | undefined, fallback: number): number | nul
   if (raw === undefined) return fallback;
   if (!/^\d{1,9}$/.test(raw)) return null;
   return Number(raw);
+}
+
+/** 'expired' | 'answered' for answered entries (agent-mail TTL vs a real close), else undefined. */
+function outcomeOf(status: string, answeredVia: string | undefined): 'answered' | 'expired' | undefined {
+  if (status !== 'answered') return undefined;
+  return answeredVia === 'expired' ? 'expired' : 'answered';
 }
 
 export async function runInboxCommand(argv: string[], io: InboxIo): Promise<number> {
@@ -71,13 +84,15 @@ export async function runInboxCommand(argv: string[], io: InboxIo): Promise<numb
         if (args.includes('--queued')) entries = entries.filter((e) => e.status === 'queued');
         if (args.includes('--json')) {
           // JSON.stringify escapes control chars, so raw content is terminal-safe here.
-          io.out(JSON.stringify(entries.map(({ id, chat_id, status, received_at, delivered_via, delivered_at }) =>
-            ({ id, chat_id, status, received_at, delivered_via, delivered_at })), null, 2) + '\n');
+          // `outcome` (answered entries only) tells a reply from an agent-mail expiry; `status` is unchanged.
+          io.out(JSON.stringify(entries.map(({ id, chat_id, status, received_at, delivered_via, delivered_at, answered_via, reminded_count }) =>
+            ({ id, chat_id, status, outcome: outcomeOf(status, answered_via), received_at, delivered_via, delivered_at, answered_via, reminded_count })), null, 2) + '\n');
           return 0;
         }
         if (entries.length === 0) { io.out('[gossipcat inbox] empty\n'); return 0; }
         for (const e of entries) {
-          io.out(`${e.id}  ${e.status.padEnd(9)}  chat=${e.chat_id}  ${e.received_at}  ${previewLine(e.content)}\n`);
+          const status = outcomeOf(e.status, e.answered_via) ?? e.status;
+          io.out(`${e.id}  ${status.padEnd(9)}  chat=${e.chat_id}  ${e.received_at}  ${previewLine(e.content)}\n`);
         }
         return 0;
       }
@@ -119,6 +134,9 @@ export async function runInboxCommand(argv: string[], io: InboxIo): Promise<numb
 function waitForMessages(root: string, timeoutSec: number, max: number, io: InboxIo): Promise<number> {
   const inbox = openInbox(root);
   const startPpid = process.ppid;
+  const clock = io.now ?? Date.now;
+  const channel = isChannelModeConfirmed(io.env ?? process.env);
+  let nextResurfaceAt = 0;
   return new Promise<number>((resolveP) => {
     let done = false;
     let watcher: FSWatcher | null = null;
@@ -135,7 +153,7 @@ function waitForMessages(root: string, timeoutSec: number, max: number, io: Inbo
       process.removeListener('SIGINT', onSignal);
       try { watcher?.close(); } catch { /* ignore */ }
       // Records the last-exit time (dashboard `recent` state) and drops the heartbeat.
-      clearWatcherHeartbeat(root, code);
+      clearWatcherHeartbeat(root, code, clock());
       if (text) io.out(text);
       resolveP(code);
     };
@@ -143,7 +161,17 @@ function waitForMessages(root: string, timeoutSec: number, max: number, io: Inbo
     const check = (): void => {
       if (done) return;
       const { claimed, remaining } = claimQueued(inbox, max, 'wait');
-      if (claimed.length > 0) finish(0, renderBatch(claimed, { remaining, footer: RESTART_WATCHER_HINT }));
+      // Idle recovery: re-surface delivered-but-unanswered mail (throttled).
+      const now = clock();
+      let reminders: typeof claimed = [];
+      if (claimed.length < max && now >= nextResurfaceAt) {
+        nextResurfaceAt = now + RESURFACE_CHECK_MS;
+        reminders = claimUnanswered(inbox, max - claimed.length, { now, channel });
+      }
+      if (claimed.length + reminders.length === 0) return;
+      finish(0, renderBatch([...claimed, ...reminders], {
+        remaining, footer: RESTART_WATCHER_HINT, resurfaced: new Set(reminders.map((e) => e.id)),
+      }));
     };
 
     const beat = (): void => {
@@ -151,11 +179,11 @@ function waitForMessages(root: string, timeoutSec: number, max: number, io: Inbo
       // Orphan guard: a re-parented watcher (Claude Code exited) would otherwise
       // keep a live heartbeat and the dashboard would claim someone is listening.
       if (process.ppid !== startPpid) { finish(3); return; }
-      try { writeWatcherHeartbeat(root); } catch { /* best effort */ }
+      try { writeWatcherHeartbeat(root, clock()); } catch { /* best effort */ }
     };
 
     // Ensure the dir exists so fs.watch can attach (0700 via the store).
-    try { inbox.prune(); } catch { /* ignore */ }
+    try { inbox.prune(clock()); } catch { /* ignore */ }
     try {
       mkdirSync(inbox.directory, { recursive: true, mode: 0o700 });
       watcher = watch(inbox.directory, () => setTimeout(check, 50));

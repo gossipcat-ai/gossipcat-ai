@@ -171,13 +171,13 @@ describe('BridgeHub with durable inbox', () => {
     hub.handlePost({ chat_id: 'chat-b', message: 'b' });
     const snap = hub.inboxSnapshot('chat-a');
     expect(snap.status).toBe(200);
-    expect(snap.payload.link).toEqual({ state: 'offline' });
+    expect(snap.payload.link).toEqual({ state: 'offline', listeners: 0 });
     expect(snap.payload.messages).toEqual([expect.objectContaining({ status: 'queued' })]);
     // content is NOT echoed by the status endpoint
     expect(JSON.stringify(snap.payload)).not.toContain('"a"');
     expect(hub.inboxSnapshot('bad id!').status).toBe(400);
     hub.registerSink(() => true);
-    expect(hub.inboxSnapshot(null).payload.link).toEqual({ state: 'session' });
+    expect(hub.inboxSnapshot(null).payload.link).toEqual({ state: 'session', listeners: 0 });
   });
 
   it('gossip_ask answers are persisted and queue without a sink', () => {
