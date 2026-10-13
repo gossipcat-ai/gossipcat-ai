@@ -553,15 +553,21 @@ export class AnthropicProvider implements ILLMProvider {
 // ─── OpenAI ─────────────────────────────────────────────────────────────────
 
 /**
- * OpenAI reasoning models (GPT-5.x family, o-series) that reject function tools
- * on the legacy `/chat/completions` endpoint and require the Responses API
- * (`/v1/responses`) instead. Matching `gpt-5*` and `o<digit>*` is conservative:
- * it only changes routing inside OpenAIProvider, and only when tools are present
- * (see `generate`). Non-tool calls stay on `/chat/completions` for every model.
+ * OpenAI reasoning models (GPT-5 and later generations, o-series). They reject
+ * function tools on the legacy `/chat/completions` endpoint (the Responses API,
+ * `/v1/responses`, is required), accept only the default temperature, and want
+ * `max_completion_tokens` instead of `max_tokens`. Matches `gpt-<major>` with
+ * major >= 5 (5-9, 10-99) and `o<digit>*`; gpt-4o, gpt-4.1 and gpt-3.5 do not
+ * match. Routing only changes inside OpenAIProvider (see `generate`).
  */
 export function isReasoningModel(model: string): boolean {
-  return /^gpt-5/i.test(model) || /^o[0-9]/i.test(model);
+  return /^gpt-(?:[5-9]|[1-9]\d)/i.test(model) || /^o[0-9]/i.test(model);
 }
+
+/** 400 body naming an unsupported `temperature` value or parameter. */
+const TEMPERATURE_UNSUPPORTED_RE = /Unsupported (?:value|parameter):\s*'temperature'/i;
+/** 400 body telling the caller to use `max_completion_tokens` instead of `max_tokens`. */
+const MAX_TOKENS_UNSUPPORTED_RE = /Unsupported parameter:\s*'max_tokens'|use 'max_completion_tokens'/i;
 
 /**
  * Error-body signature emitted by the OpenAI API when a reasoning model is sent
@@ -663,8 +669,11 @@ export class OpenAIProvider implements ILLMProvider {
       model: this.model,
       messages: messages.map(m => this.toOpenAIMessage(m)),
     };
-    if (options?.maxTokens) body.max_tokens = options.maxTokens;
-    if (options?.temperature !== undefined) body.temperature = options.temperature;
+    // Reasoning models on the canonical endpoint reject max_tokens and any
+    // non-default temperature; OpenAI-compatible reuses keep both.
+    const strictReasoning = this.isCanonicalOpenAI && isReasoningModel(this.model);
+    if (options?.maxTokens) body[strictReasoning ? 'max_completion_tokens' : 'max_tokens'] = options.maxTokens;
+    if (options?.temperature !== undefined && !strictReasoning) body.temperature = options.temperature;
     if (options?.tools?.length) {
       body.tools = options.tools.map(t => ({
         type: 'function',
@@ -684,18 +693,43 @@ export class OpenAIProvider implements ILLMProvider {
     // attempt (never regenerated per attempt).
     const hasIdempotencyKey = this.isCanonicalOpenAI;
     if (hasIdempotencyKey) headers['Idempotency-Key'] = randomUUID();
-    const res = await fetchWithRetry503(`${this.baseUrl}/chat/completions`, {
+    const postChat = (payload: Record<string, unknown>, hdrs: Record<string, string> = headers) => fetchWithRetry503(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: hdrs,
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(this.timeoutMs),
     }, 'openai', { hasIdempotencyKey });
+    let res = await postChat(body);
 
+    // Parameter self-heal: a model isReasoningModel() doesn't know rejects
+    // `temperature` / `max_tokens` with a 400. Retry ONCE with both adjustments
+    // applied. The first request was definitively rejected, so the retry is a new
+    // request with a different body and gets a fresh Idempotency-Key (reusing a
+    // key with different parameters can itself be rejected).
+    let fullBody = '';
     if (!res.ok) {
       // Read the FULL body once: the truncated 200-char slice feeds the thrown
       // message + quota handlers, but the Responses-retry directive can appear
       // past char 200 in a verbose error, so the regex must test the full text.
-      const fullBody = await res.text();
+      fullBody = await res.text();
+      if (res.status === 400) {
+        const dropTemperature = 'temperature' in body && TEMPERATURE_UNSUPPORTED_RE.test(fullBody);
+        const swapMaxTokens = 'max_tokens' in body && MAX_TOKENS_UNSUPPORTED_RE.test(fullBody);
+        if (dropTemperature || swapMaxTokens) {
+          const adjusted = { ...body };
+          if (dropTemperature) delete adjusted.temperature;
+          if (swapMaxTokens) {
+            adjusted.max_completion_tokens = adjusted.max_tokens;
+            delete adjusted.max_tokens;
+          }
+          const retryHeaders = hasIdempotencyKey ? { ...headers, 'Idempotency-Key': randomUUID() } : headers;
+          res = await postChat(adjusted, retryHeaders);
+          fullBody = res.ok ? '' : await res.text();
+        }
+      }
+    }
+
+    if (!res.ok) {
       const body = fullBody.slice(0, 200);
       if (res.status === 429) this.quota.handle429(res, body);
       if (res.status === 503) this.quota.handle503(res, body);

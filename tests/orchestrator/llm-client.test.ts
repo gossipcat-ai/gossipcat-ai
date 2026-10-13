@@ -445,6 +445,12 @@ describe('LLM Client', () => {
       ['GPT-5.6-Terra', true],   // case-insensitive
       ['o3', true],
       ['o1-mini', true],
+      ['o3-mini', true],
+      ['gpt-5.1-mini', true],
+      ['gpt-6.1-sol', true],
+      ['gpt-10', true],
+      ['gpt-4.1', false],
+      ['deepseek-v4-pro', false],
       ['gpt-4o', false],
       ['gpt-4o-mini', false],
       ['gpt-3.5-turbo', false],
@@ -452,6 +458,75 @@ describe('LLM Client', () => {
       ['omni-model', false],     // "o" not followed by a digit
     ])('%s → %s', (model, expected) => {
       expect(isReasoningModel(model)).toBe(expected);
+    });
+  });
+
+  describe('OpenAIProvider — chat path temperature / max_tokens handling', () => {
+    const TEMP_400 = `{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported.","type":"invalid_request_error","param":"temperature"}}`;
+    const okResponse = () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'fine', tool_calls: null } }] }) });
+    const badResponse = (text: string) => ({ ok: false, status: 400, headers: { get: () => null }, text: async () => text });
+    const msgs = [{ role: 'user' as const, content: 'hi' }];
+    let originalFetch: typeof fetch;
+    beforeEach(() => { originalFetch = global.fetch; });
+    afterEach(() => { global.fetch = originalFetch; });
+
+    function mockFetch(responses: unknown[]) {
+      const calls: Array<{ url: string; body: any; headers: any }> = [];
+      global.fetch = jest.fn().mockImplementation((url: string, init: any) => {
+        calls.push({ url, body: JSON.parse(init.body), headers: init.headers });
+        return Promise.resolve(responses[Math.min(calls.length - 1, responses.length - 1)]);
+      }) as unknown as typeof fetch;
+      return calls;
+    }
+
+    it('canonical endpoint + reasoning model omits temperature and uses max_completion_tokens', async () => {
+      const calls = mockFetch([okResponse()]);
+      const provider = new OpenAIProvider('k', 'gpt-6.1-sol');
+      await provider.generate(msgs, { temperature: 0, maxTokens: 100 });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body).not.toHaveProperty('temperature');
+      expect(calls[0].body).not.toHaveProperty('max_tokens');
+      expect(calls[0].body.max_completion_tokens).toBe(100);
+    });
+
+    it('non-canonical base_url keeps temperature and max_tokens', async () => {
+      const calls = mockFetch([okResponse()]);
+      const provider = new OpenAIProvider('k', 'gpt-6.1-sol', undefined, 'https://api.deepseek.com/v1');
+      await provider.generate(msgs, { temperature: 0, maxTokens: 100 });
+      expect(calls[0].body.temperature).toBe(0);
+      expect(calls[0].body.max_tokens).toBe(100);
+      expect(calls[0].body).not.toHaveProperty('max_completion_tokens');
+    });
+
+    it('unknown model: temperature 400 retries once without temperature, with a fresh Idempotency-Key', async () => {
+      const calls = mockFetch([badResponse(TEMP_400), okResponse()]);
+      const provider = new OpenAIProvider('k', 'future-model');
+      const res = await provider.generate(msgs, { temperature: 0 });
+      expect(res.text).toBe('fine');
+      expect(calls).toHaveLength(2);
+      expect(calls[0].body.temperature).toBe(0);
+      expect(calls[1].body).not.toHaveProperty('temperature');
+      expect(calls[1].headers['Idempotency-Key']).toBeTruthy();
+      expect(calls[1].headers['Idempotency-Key']).not.toBe(calls[0].headers['Idempotency-Key']);
+    });
+
+    it('a second identical temperature 400 is surfaced, not looped', async () => {
+      const calls = mockFetch([badResponse(TEMP_400)]);
+      const provider = new OpenAIProvider('k', 'future-model');
+      await expect(provider.generate(msgs, { temperature: 0 })).rejects.toThrow(/OpenAI API error \(400\)/);
+      expect(calls).toHaveLength(2);
+    });
+
+    it('max_tokens unsupported 400 retries once with max_completion_tokens', async () => {
+      const calls = mockFetch([
+        badResponse(`{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","param":"max_tokens"}}`),
+        okResponse(),
+      ]);
+      const provider = new OpenAIProvider('k', 'future-model');
+      await provider.generate(msgs, { maxTokens: 50 });
+      expect(calls).toHaveLength(2);
+      expect(calls[1].body).not.toHaveProperty('max_tokens');
+      expect(calls[1].body.max_completion_tokens).toBe(50);
     });
   });
 
