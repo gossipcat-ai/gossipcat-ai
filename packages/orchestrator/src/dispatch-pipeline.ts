@@ -435,9 +435,10 @@ export class DispatchPipeline {
       retrievedLessons: lessonBlock || undefined,
       inboxMail: mail?.block,
     });
-    // Mail counts as delivered only if it survived the assembler's size budget
-    // and the worker is actually started (marked right before executeTask).
-    const deliveredMail = mail && promptContent.includes(mail.block) ? mail : null;
+    // Only mail that survived the assembler's size budget is in the prompt; it
+    // is marked delivered once this task returns a final result (FINAL_RESULT
+    // below). On error / timeout / cancel it stays queued for the next dispatch.
+    const mailInPrompt = mail && promptContent.includes(mail.block) ? mail : null;
 
     // 6. Record TaskGraph created
     this.taskGraph.recordCreated(taskId, agentId, task, agentSkills);
@@ -556,9 +557,6 @@ export class DispatchPipeline {
           log(`→ resolutionRoots: assignRoot(${agentId}, ${rrCandidate}) [taskId=${taskId}]`);
         }
       }
-      if (deliveredMail) {
-        try { this.agentMail?.markDelivered(deliveredMail.ids, taskId); } catch { /* best-effort */ }
-      }
       const stream = worker.executeTask(task, options?.lens, promptContent, taskId, options?.images, this.projectRoot);
       entry.stream = stream;
       for await (const event of stream) {
@@ -611,6 +609,9 @@ export class DispatchPipeline {
             // stops it from looking "running" on disk if an MCP reconnect lands
             // before the next dispatch/collect call rewrites the file (#736).
             this.pruneRelayTaskRecord(entry.id);
+            if (mailInPrompt) {
+              try { this.agentMail?.markDelivered(entry.agentId, mailInPrompt.ids, entry.id); } catch { /* best-effort */ }
+            }
             // Agent mail: <agent_message> tags in the final result, stamped
             // with this task's agent id (never the tag's). Never throws.
             if (event.payload.result) {

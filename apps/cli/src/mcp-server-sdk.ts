@@ -2143,12 +2143,13 @@ export function createMcpServer(): McpServer {
   // ── Agent mail: orchestrator → agent (spec 2026-10-13-agent-inbox-addressing) ─
   // Delivered into the agent's prompt on its next dispatch. `from` is stamped
   // 'orchestrator'; `to` must be a configured agent id (validated in the handler).
+  // Orchestrator-only tool (no caller auth): never add it to agent tool allowlists.
   server.tool(
     'gossip_inbox_send',
     'Send a short message from the orchestrator to a configured agent. It is delivered (fenced as untrusted data) into that agent\'s prompt on its next dispatch; the agent can answer with an <agent_message in_reply_to="..."> tag. Not for tasks, results or findings — use gossip_run / gossip_dispatch for work. To answer the human use `reply`. Pass in_reply_to with an agent message id (from its inbox fence) to close it. Returns the new inbox id.',
     {
       to: z.string().describe('A configured agent id (from .gossip/config.json). Not "human" or "orchestrator".'),
-      text: z.string().describe('The message text.'),
+      text: z.string().describe('The message text (at most what one dispatch can deliver whole; longer text is rejected).'),
       kind: z.enum(['chat', 'notice', 'answer']).optional().describe('Message kind (default "chat").'),
       ref: z.object({
         task_id: z.string().optional(),

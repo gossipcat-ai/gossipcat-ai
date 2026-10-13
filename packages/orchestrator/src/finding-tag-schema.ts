@@ -40,7 +40,7 @@ export const OUTPUT_DELIVERY_PROTOCOL = `OUTPUT DELIVERY — emit findings as TE
  * Own block for the same byte-size reason as OUTPUT_DELIVERY_PROTOCOL. Task
  * prompts only — never cross-review prompts.
  */
-export const AGENT_MESSAGE_HINT = `AGENT MAIL (optional) — for a question or blocker for the orchestrator that is NOT part of your task result or findings, you MAY add a short <agent_message to="orchestrator">text</agent_message> to your response (max 5); to answer inbox mail, add in_reply_to="<its id>".`;
+export const AGENT_MESSAGE_HINT = `AGENT MAIL (optional) — for a question or blocker for the orchestrator that is NOT part of your task result or findings, you MAY add a short <agent_message to="orchestrator">text</agent_message> to your response (max 5); to answer inbox mail, add in_reply_to="<its id>". The opening tag must start its own line, outside code blocks and outside <agent_finding> bodies — tags anywhere else are ignored.`;
 
 export const CONSENSUS_OUTPUT_FORMAT = `⚠ UNKNOWN TYPES ARE SILENTLY DROPPED — only type="finding", type="suggestion", type="insight" are accepted. Any other type value (e.g. approval, concern, risk, recommendation, confirmed) will NOT appear in the dashboard, scores, or signals.
 

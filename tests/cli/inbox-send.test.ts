@@ -7,7 +7,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { ClaudeInbox, inboxDirFor } from '@gossip/relay/dashboard/claude-inbox';
 import { acceptAgentMessages } from '@gossip/relay/dashboard/agent-mail';
-import { readConfiguredAgentIds, sendInboxMail } from '../../apps/cli/src/handlers/inbox-send';
+import { INBOX_SEND_MAX_CHARS, readConfiguredAgentIds, sendInboxMail } from '../../apps/cli/src/handlers/inbox-send';
+import { AGENT_MAIL_MAX_CHARS, prepareAgentMail } from '@gossip/relay/dashboard/agent-mail';
 import { claimForHook } from '../../apps/cli/src/inbox-format';
 
 let root: string;
@@ -46,6 +47,30 @@ describe('sendInboxMail', () => {
     expect(sendInboxMail(root, { to: 'codex-sol', text: '  ' }).ok).toBe(false);
     expect(sendInboxMail(root, { to: 'codex-sol', text: 'x', kind: 'shout' }).ok).toBe(false);
     expect(inbox.list()).toEqual([]);
+  });
+
+  it('rejects text longer than one dispatch can deliver whole; the longest accepted text is delivered untruncated', () => {
+    expect(INBOX_SEND_MAX_CHARS).toBeLessThan(AGENT_MAIL_MAX_CHARS);
+    const tooLong = sendInboxMail(root, { to: 'codex-sol', text: 'x'.repeat(INBOX_SEND_MAX_CHARS + 1) });
+    expect(tooLong).toEqual({ ok: false, error: expect.stringContaining(`at most ${INBOX_SEND_MAX_CHARS} chars`) });
+    expect(inbox.list()).toEqual([]);
+    const r = sendInboxMail(root, {
+      to: 'codex-sol', text: 'y'.repeat(INBOX_SEND_MAX_CHARS), kind: 'notice', ref: { task_id: 'z'.repeat(64) },
+    });
+    expect(r.ok).toBe(true);
+    const batch = prepareAgentMail(inbox, 'codex-sol')!;
+    expect(batch.block).toContain('y'.repeat(INBOX_SEND_MAX_CHARS));
+    expect(batch.block).not.toContain('[truncated');
+  });
+
+  it('never takes the slots reserved for the human; human mail still fits', () => {
+    const t0 = Date.now() - 1_000_000;
+    for (let i = 0; i < 150; i++) inbox.append(`chat-${i}`, `h${i}`, t0 + i);
+    const r = sendInboxMail(root, { to: 'codex-sol', text: 'one more' });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/reserved|kept for the human/);
+    expect(() => inbox.append('chat-human', 'still room for me', t0 + 500)).not.toThrow();
   });
 
   it('a stamped from can not be overridden by arguments', () => {

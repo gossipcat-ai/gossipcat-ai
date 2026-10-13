@@ -5,7 +5,7 @@
 import { randomUUID } from 'crypto';
 import { hasMemoryQuery } from '@gossip/relay';
 import { ctx, NATIVE_TASK_TTL_MS, defaultImportanceScores } from '../mcp-context';
-import { acceptNativeAgentMail } from './native-agent-mail';
+import { acceptNativeAgentMail, markNativeAgentMailDelivered } from './native-agent-mail';
 import { revertLeakedPaths, preserveLeakedPaths } from './worktree-isolation-detection';
 
 /**
@@ -692,10 +692,13 @@ export async function handleNativeRelay(task_id: string, result: string, error?:
   // Release scope if this native task held one
   try { ctx.mainAgent.scopeTracker.release(task_id); } catch { /* best-effort — no scope registered is fine */ }
 
-  // Agent mail (inbox spec step 3): <agent_message> tags in a token-validated,
-  // non-failed task result become to=orchestrator mail. The sender is the
-  // task record's agent id, never anything in the tag. Never throws.
+  // Agent mail (inbox spec steps 3 + 4), token-validated, non-failed results
+  // only: the mail this task's prompt carried is now delivered (a failed task
+  // leaves it queued for the next dispatch), and <agent_message> tags become
+  // to=orchestrator mail. The sender is the task record's agent id, never
+  // anything in the tag. Never throws.
   if (!error && !taskInfo.utilityType && taskInfo.agentId !== '_utility' && typeof result === 'string' && result) {
+    markNativeAgentMailDelivered(taskInfo.agentId, taskInfo.agentMailIds, task_id);
     acceptNativeAgentMail(taskInfo.agentId, task_id, result);
   }
 

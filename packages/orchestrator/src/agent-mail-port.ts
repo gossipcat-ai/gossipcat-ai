@@ -17,8 +17,12 @@ export interface AgentMailBatch {
 export interface AgentMailPort {
   /** Queued mail addressed to `agentId`, rendered; does not mark anything. */
   prepare(agentId: string): AgentMailBatch | null;
-  /** Mark mail delivered once its block is in the prompt for `taskId`. */
-  markDelivered(ids: readonly string[], taskId: string): unknown;
+  /**
+   * Mark mail addressed to `agentId` delivered (and close orchestrator mail)
+   * once `taskId` — whose prompt carried the block — produced a successful
+   * result. Mail of a failed / cancelled task is left queued for the next one.
+   */
+  markDelivered(agentId: string, ids: readonly string[], taskId: string): unknown;
   /** Write the `<agent_message>` tags of a validated task result as mail from `agentId`. */
   acceptResult(agentId: string, taskId: string, result: string): unknown;
 }

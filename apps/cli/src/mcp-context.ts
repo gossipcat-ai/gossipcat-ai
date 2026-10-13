@@ -99,6 +99,11 @@ export interface NativeTaskInfo {
   /** One-time token that must accompany gossip_relay — prevents task-ID spoofing */
   relayToken?: string;
   /**
+   * Inbox ids of agent mail embedded in this task's prompt. Marked delivered
+   * (and orchestrator mail closed) only after a successful relay of this task.
+   */
+  agentMailIds?: string[];
+  /**
    * Whether the native agent called memory_query during this task.
    * Set by gossip_relay when the agent includes memoryQueryCalled in its result metadata.
    * Threaded to TaskGraph.recordCompleted/recordFailed for compliance auditing.

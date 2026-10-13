@@ -11,9 +11,12 @@
  */
 import { readFileSync } from 'fs';
 import {
-  ClaudeInbox, InboxFullError, INBOX_ID_RE, INBOX_MAX_CONTENT_CHARS, inboxDirFor, type InboxKind, type InboxRef,
+  ClaudeInbox, InboxFullError, INBOX_ID_RE, INBOX_MAX_UNANSWERED, inboxDirFor, type InboxKind, type InboxRef,
 } from '@gossip/relay/dashboard/claude-inbox';
-import { agentChatId, closeRepliedMail, isAgentParty } from '@gossip/relay/dashboard/agent-mail';
+import { AGENT_MAIL_MAX_MESSAGE_CHARS, AGENT_MAIL_RESERVED_SLOTS, agentChatId, closeRepliedMail, isAgentParty } from '@gossip/relay/dashboard/agent-mail';
+
+/** Longest text gossip_inbox_send accepts: what one dispatch can deliver whole. */
+export const INBOX_SEND_MAX_CHARS = AGENT_MAIL_MAX_MESSAGE_CHARS;
 import { findConfigPath } from '../config';
 
 export interface InboxSendArgs {
@@ -47,7 +50,9 @@ export function sendInboxMail(projectRoot: string, args: InboxSendArgs, agentIds
     return { ok: false, error: `"to" must be a configured agent id (one of: ${agentIds.join(', ') || 'none'}). Use \`reply\` to answer the human.` };
   }
   if (typeof text !== 'string' || text.trim().length === 0) return { ok: false, error: '"text" must be a non-empty string.' };
-  if (text.length > INBOX_MAX_CONTENT_CHARS) return { ok: false, error: `"text" is longer than ${INBOX_MAX_CONTENT_CHARS} chars.` };
+  if (text.length > INBOX_SEND_MAX_CHARS) {
+    return { ok: false, error: `"text" is ${text.length} chars; one message can carry at most ${INBOX_SEND_MAX_CHARS} chars into an agent's prompt. Shorten it or split it into several messages.` };
+  }
   if (args.kind !== undefined && !SEND_KINDS.includes(args.kind as InboxKind)) {
     return { ok: false, error: '"kind" must be chat, notice or answer.' };
   }
@@ -55,6 +60,11 @@ export function sendInboxMail(projectRoot: string, args: InboxSendArgs, agentIds
   if (!chatId) return { ok: false, error: `invalid agent id "${to}".` };
   const irt = typeof args.in_reply_to === 'string' && INBOX_ID_RE.test(args.in_reply_to) ? args.in_reply_to : undefined;
   const inbox = new ClaudeInbox(inboxDirFor(projectRoot));
+  // Like agent-authored mail, orchestrator→agent mail never takes the slots reserved for the human.
+  const unanswered = inbox.stats().unanswered;
+  if (unanswered >= INBOX_MAX_UNANSWERED - AGENT_MAIL_RESERVED_SLOTS) {
+    return { ok: false, error: `inbox nearly full (${unanswered} unanswered messages); the last ${AGENT_MAIL_RESERVED_SLOTS} slots are kept for the human.` };
+  }
   try {
     const e = inbox.append(chatId, text, Date.now(), {
       to, from: 'orchestrator', kind: (args.kind as InboxKind | undefined) ?? 'chat',

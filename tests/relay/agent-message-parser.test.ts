@@ -15,7 +15,7 @@ describe('parseAgentMessages', () => {
   });
 
   it('defaults kind to notice, and coerces answer / unknown kinds to notice', () => {
-    const r = parseAgentMessages('<agent_message to="orchestrator">a</agent_message><agent_message to="orchestrator" kind="answer">b</agent_message><agent_message kind="zzz">c</agent_message>');
+    const r = parseAgentMessages('<agent_message to="orchestrator">a</agent_message>\n<agent_message to="orchestrator" kind="answer">b</agent_message>\n<agent_message kind="zzz">c</agent_message>');
     expect(r.messages.map((m) => [m.text, m.kind])).toEqual([['a', 'notice'], ['b', 'notice'], ['c', 'notice']]);
   });
 
@@ -28,7 +28,7 @@ describe('parseAgentMessages', () => {
   });
 
   it('drops tags addressed to anyone but orchestrator (with a log-safe recipient)', () => {
-    const r = parseAgentMessages('<agent_message to="human">hi</agent_message><agent_message to="codex-sol">x</agent_message><agent_message to="a b\x1b[31m">y</agent_message><agent_message to="orchestrator">ok</agent_message>');
+    const r = parseAgentMessages('<agent_message to="human">hi</agent_message>\n<agent_message to="codex-sol">x</agent_message>\n<agent_message to="a b\x1b[31m">y</agent_message>\n<agent_message to="orchestrator">ok</agent_message>');
     expect(r.messages.map((m) => m.text)).toEqual(['ok']);
     expect(r.dropped).toEqual([
       { reason: 'recipient', to: 'human' },
@@ -64,9 +64,66 @@ describe('parseAgentMessages', () => {
     expect(r.messages[0].text).toContain('[truncated by gossipcat: 10 chars dropped]');
   });
 
-  it('stays fast on adversarial input (many unclosed openers)', () => {
-    const t = Date.now();
-    parseAgentMessages('<agent_message '.repeat(50_000) + '>' + 'x'.repeat(100_000));
-    expect(Date.now() - t).toBeLessThan(2000);
+  it('scales linearly on adversarial input (many unclosed openers)', () => {
+    // Size-scaled, not wall-clock: a quadratic scan would make 4N cost ~16x N.
+    const input = (n: number): string => '<agent_message '.repeat(n) + '\n' + '<agent_message \n'.repeat(n) + '>' + 'x'.repeat(n);
+    const cost = (n: number): number => {
+      const src = input(n);
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const t = process.hrtime.bigint();
+        parseAgentMessages(src);
+        best = Math.min(best, Number(process.hrtime.bigint() - t));
+      }
+      return best;
+    };
+    cost(2_000); // warm up the JIT
+    const ratio = cost(80_000) / cost(20_000);
+    expect(ratio).toBeLessThan(10);
+  });
+});
+
+describe('parseAgentMessages — only real tags count', () => {
+  const tag = (t: string): string => `<agent_message to="orchestrator">${t}</agent_message>`;
+  const texts = (src: string): string[] => parseAgentMessages(src).messages.map((m) => m.text);
+
+  it('accepts a tag at line start, optionally indented with spaces or tabs', () => {
+    expect(texts(`intro\n${tag('a')}\n   ${tag('b')}\n\t${tag('c')}`)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('ignores a tag that starts mid-line (inline quote, or after another tag)', () => {
+    expect(texts(`Agents can write ${tag('quoted')} to reach the orchestrator.`)).toEqual([]);
+    expect(texts(`${tag('first')}${tag('second on the same line')}`)).toEqual(['first']);
+    expect(texts(`- example: ${tag('bullet')}`)).toEqual([]);
+  });
+
+  it('ignores tags inside ``` and ~~~ fenced code blocks', () => {
+    const src = [
+      '```xml', tag('in backticks'), '```',
+      '~~~', tag('in tildes'), '~~~',
+      '````md', '```', tag('inside a longer fence'), '````',
+      tag('real'),
+    ].join('\n');
+    expect(texts(src)).toEqual(['real']);
+  });
+
+  it('a ``` line does not close a ~~~ fence', () => {
+    expect(texts(['~~~', '```', tag('still fenced'), '~~~', tag('after')].join('\n'))).toEqual(['after']);
+  });
+
+  it('ignores tags inside <agent_finding> bodies, single- and multi-line', () => {
+    const src = [
+      `<agent_finding type="finding" severity="low">quoted: ${tag('one-line')}</agent_finding>`,
+      '<agent_finding type="finding" severity="low">',
+      'The parser accepts:',
+      tag('multi-line finding body'),
+      '</agent_finding>',
+      tag('real'),
+    ].join('\n');
+    expect(texts(src)).toEqual(['real']);
+  });
+
+  it('a multi-line message body is taken whole', () => {
+    expect(texts('<agent_message to="orchestrator">\nline 1\n```\ncode\n```\n</agent_message>')).toEqual(['line 1\n```\ncode\n```']);
   });
 });
