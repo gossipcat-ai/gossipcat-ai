@@ -47,7 +47,7 @@ export function readConfiguredAgentIds(projectRoot: string): string[] {
 export function sendInboxMail(projectRoot: string, args: InboxSendArgs, agentIds: readonly string[] = readConfiguredAgentIds(projectRoot)): InboxSendResult {
   const { to, text } = args;
   if (typeof to !== 'string' || !isAgentParty(to) || !agentIds.includes(to)) {
-    return { ok: false, error: `"to" must be a configured agent id (one of: ${agentIds.join(', ') || 'none'}). Use \`reply\` to answer the human.` };
+    return { ok: false, error: `"to" must be a configured agent id (one of: ${agentIds.join(', ') || 'none'}). Use \`gossip_chat_reply\` to answer the human.` };
   }
   if (typeof text !== 'string' || text.trim().length === 0) return { ok: false, error: '"text" must be a non-empty string.' };
   if (text.length > INBOX_SEND_MAX_CHARS) {
