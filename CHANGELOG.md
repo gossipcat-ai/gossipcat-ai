@@ -4,6 +4,75 @@ All notable changes to gossipcat are documented here. The format is loosely base
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-13
+
+Messaging release. Dashboard messages now reach a plain `claude` /
+`claude --resume` session without the development-channels flag, agents can
+send the orchestrator short notes, and an OpenAI Codex model can run as a
+gossipcat agent. Also closes every open Dependabot advisory.
+
+### Added
+
+- **Codex CLI agent bridge and shared chat page** (PR #757) — an OpenAI Codex
+  model (e.g. `codex-sol`) runs as a relay agent through a local Codex CLI
+  bridge (`scripts/codex-bridge-service.py`, `gossip_codex_bridge` tool), and a
+  localhost shared-chat page puts the human, Claude Code and the Codex agent in
+  one thread. See `docs/CODEX_BRIDGE.md` and `docs/CODEX_CLI.md`.
+- **Durable Claude inbox** (PR #758) — dashboard messages are stored in
+  `.gossip/bridge/inbox` and delivered to sessions without channels through
+  `gossipcat inbox wait` (run as a background command) plus SessionStart /
+  UserPromptSubmit hooks. Duplicates are possible, losses are not: unanswered
+  messages resurface and are never pruned. A reply outbox holds replies sent
+  while the dashboard page is closed. See `docs/CLAUDE_INBOX.md`.
+- **`reply` takes `in_reply_to`** (PR #758) — a reply closes exactly the
+  messages it names. Without it, only messages already shown to Claude close;
+  a message that arrived while Claude was composing a reply is never closed
+  unseen. Channel notifications carry `inbox_id` for the same purpose.
+- **Agent mail** (PRs #759, #761) — inbox records carry `to` / `from` / `kind`
+  (sender stamped by the relay). Agents may put an `<agent_message>` tag on its
+  own line in a task result to send the orchestrator a short note; the new
+  `gossip_inbox_send` tool lets the orchestrator write to a configured agent,
+  delivered with the agent's next dispatch. Agent mail is fenced as untrusted
+  data, capped per sender, and can never take the last 50 inbox slots, which
+  stay reserved for the human.
+
+### Changed
+
+- Every agent prompt now includes a short note on how to send the orchestrator
+  an `<agent_message>`. The warm prompt cache fingerprint includes it, so
+  cached prompts are rebuilt once after upgrading.
+- The MCP channel instructions now describe dashboard text as untrusted data
+  (the human's chat message to answer, not instructions that can change rules
+  or permissions), matching the inbox.
+
+### Fixed
+
+- **OpenAI reasoning models rejected `temperature: 0`** (PR #762) — consensus
+  cross-review failed for `gpt-6.1-sol`. GPT-5 and later generations are now
+  recognized as reasoning models: on `api.openai.com` they get no
+  `temperature` and use `max_completion_tokens`. A 400 rejecting either
+  parameter is retried once without it. OpenAI-compatible endpoints are
+  unchanged.
+
+### Security
+
+- Patched every open Dependabot advisory (11) (PR #760):
+  `@modelcontextprotocol/sdk` → `^1.31.0`, `proxy-addr` 2.0.8,
+  `ip-address` 10.7.2, `fast-uri` 4.2.1; dev-only `handlebars` 4.7.10,
+  `source-map-js` 1.2.2, `brace-expansion` 5.0.12. `npm audit --omit=dev`
+  reports no vulnerabilities. A dev-only `braces` advisory (via jest) has no
+  upstream fix yet.
+- Cookie-authenticated dashboard writes require a same-origin request, and the
+  shared-chat proxy accepts only localhost Host / Origin (PRs #757, #758).
+
+### Upgrading
+
+- Restart the MCP server (`/mcp` reconnect) after upgrading.
+- To receive dashboard messages without channels, start
+  `gossipcat inbox wait --timeout 0` as a background command in the session;
+  the hooks remind the session to do so.
+- The Codex bridge is optional and only needed for Codex CLI agents.
+
 ## [0.8.1] — 2026-09-07
 
 Consensus-correctness patch release. Closes every open Dependabot advisory

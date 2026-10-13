@@ -1,6 +1,6 @@
 # Yerel Codex CLI worker
 
-Gossipcat 0.8.1 görev akışına ayrı bir `codex exec` oturumu ekler. Claude native ajanları ve mevcut oturumlar korunur. MCP araçlarını yalnızca Codex'e bağlamak yerine, `gossip_dispatch` → Codex worker → `gossip_collect` akışı kullanılır. CLI worker aynı süreçteki görev pipeline'ına bağlıdır; ayrıca WebSocket ajanı açmaz.
+Gossipcat 0.9.0 görev akışına ayrı bir `codex exec` oturumu ekler. Claude native ajanları ve mevcut oturumlar korunur. MCP araçlarını yalnızca Codex'e bağlamak yerine, `gossip_dispatch` → Codex worker → `gossip_collect` akışı kullanılır. CLI worker aynı süreçteki görev pipeline'ına bağlıdır; ayrıca WebSocket ajanı açmaz.
 
 ## Yapılandırma
 
