@@ -5921,40 +5921,23 @@ export function createMcpServer(): McpServer {
     }
   );
 
+  // List from the live MCP registry so newly registered tools cannot drift out of
+  // this catalog (issue #765: hardcoded list omitted gossip_ask, gossip_relay_cross_review,
+  // gossip_resolve_findings, gossip_chat_reply / formerly "reply", and gossip_codex_bridge).
   server.tool(
     'gossip_tools',
     'List all available gossipcat MCP tools with descriptions. Call after /mcp reconnect to discover new tools.',
     {},
     async () => {
-      const tools = [
-        // Core (8)
-        { name: 'gossip_run', desc: 'Run task on one agent. Use agent_id:"auto" for orchestrator decomposition. Supports write_mode and scope.' },
-        { name: 'gossip_dispatch', desc: 'Dispatch tasks — mode:"single" (one agent), "parallel" (fan-out), "consensus" (cross-review).' },
-        { name: 'gossip_collect', desc: 'Collect results from dispatched tasks. Use consensus:true with explicit task_ids for cross-review.' },
-        { name: 'gossip_relay', desc: 'Feed native Agent() result back into gossipcat relay for consensus, memory, and gossip.' },
-        { name: 'gossip_signals', desc: 'Record or retract consensus signals. action:"record" or "retract".' },
-        { name: 'gossip_status', desc: 'Show system status, agent list, relay, workers, and dashboard URL/key.' },
-        { name: 'gossip_update', desc: 'Check for or apply gossipcat updates from npm. check_only:true to just see version diff.' },
-        { name: 'gossip_setup', desc: 'Create or update team. mode:"merge", "replace", or "update_instructions".' },
-        { name: 'gossip_session_save', desc: 'Save cognitive session summary for next session context. Call before ending session.' },
-        // Power-user (5)
-        { name: 'gossip_plan', desc: 'Plan a task with write-mode suggestions. Returns dispatch-ready JSON for approval.' },
-        { name: 'gossip_scores', desc: 'View agent performance scores and dispatch weights.' },
-        { name: 'gossip_skills', desc: 'Manage skills. action: list, get, bind, unbind, build, develop.' },
-        { name: 'gossip_config', desc: 'Manage runtime feature-gate flags in .gossip/runtime-flags.json. action: list, get, set, unset, reload.' },
-        { name: 'gossip_remember', desc: 'Search an agent\'s archived knowledge files by keyword query.' },
-        { name: 'gossip_skill_query', desc: 'Fetch one bound skill\'s full markdown on demand (read-only). Native twin of the relay skill_query worker tool.' },
-        { name: 'gossip_verify_memory', desc: 'On-demand staleness check for a memory file claim. Returns FRESH | STALE | CONTRADICTED | INCONCLUSIVE with file:line evidence.' },
-        { name: 'gossip_tools', desc: 'List available tools (this command).' },
-        { name: 'gossip_guide', desc: 'Show the gossipcat handbook for humans — invariants, operator playbook, caveats, hallucination patterns, glossary. Read the docs, not LLM context.' },
-        { name: 'gossip_progress', desc: 'Show active task progress and consensus phase. No params.' },
-        { name: 'gossip_watch', desc: 'Pull signals recorded since a cursor timestamp. Stateless, cursor-based; max 24h lookback. Use to see consensus signals as they land.' },
-        { name: 'gossip_reload', desc: 'Terminate MCP server so Claude Code respawns with fresh bundle. Use after npm run build:mcp.' },
-        { name: 'gossip_format', desc: 'Return the CONSENSUS_OUTPUT_FORMAT block to paste into ad-hoc Agent() prompts so native subagents emit parseable <agent_finding> tags.' },
-        { name: 'gossip_bug_feedback', desc: 'File a GitHub issue on the gossipcat repo from an in-session bug report. Dedupes against open issues.' },
-        { name: 'gossip_inbox_send', desc: 'Send a short orchestrator message to a configured agent; delivered into its prompt on its next dispatch. Agents answer with <agent_message> tags.' },
-        { name: 'gossip_ask_back', desc: 'Re-engage an agent after a fabrication for first-person root-cause analysis. action:"ask" dispatches the introspection prompt; action:"record" logs the answer.' },
-      ];
+      type RegisteredTool = { description?: string; enabled?: boolean };
+      const registered = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools;
+      const tools = Object.entries(registered)
+        .filter(([, tool]) => tool.enabled !== false)
+        .map(([name, tool]) => ({
+          name,
+          desc: (tool.description ?? '').trim() || '(no description)',
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
       const list = tools.map(t => `- ${t.name}: ${t.desc}`).join('\n');
       return { content: [{ type: 'text' as const, text: `Gossipcat Tools (${tools.length}):\n\n${list}` }] };
     }
