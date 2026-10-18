@@ -224,6 +224,11 @@ type CooldownReason = 'quota' | 'unavailable' | 'spend_cap' | 'no_quota';
 // stops lying about "OK" the instant a short cooldown would have expired.
 const SPEND_CAP_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const SPEND_CAP_RE = /spend(?:ing)?\s+cap/i;
+// Half-open probe delay for long-lived cooldowns (spend_cap / no_quota).
+// Without this, checkBeforeRequest blocks every request for 24h so onSuccess
+// can never clear the latch — a circuit breaker with no half-open (issue #756).
+// Ordinary short quota/unavailable cooldowns stay hard-closed until expiry.
+const HALF_OPEN_MIN_OPEN_MS = 60 * 60 * 1000;
 
 // A free-tier key with a zero request/token limit for the model (issue #732)
 // is a PERMANENT no-quota state, not a transient rate limit — waiting never
@@ -242,6 +247,10 @@ interface QuotaProviderState {
   exhaustedUntil: number;
   consecutive429s: number;
   reason?: CooldownReason;
+  /** Earliest time a half-open probe may run (spend_cap / no_quota only). */
+  halfOpenAfter?: number;
+  /** Whether the current cooldown window has already used its half-open probe. */
+  halfOpenProbeUsed?: boolean;
 }
 
 interface QuotaStateFile {
@@ -254,11 +263,17 @@ class QuotaTracker {
   private consecutive429s = 0;
   private exhaustedUntil = 0;
   private reason: CooldownReason = 'quota';
+  private halfOpenAfter = 0;
+  private halfOpenProbeUsed = false;
   private statePath: string | null;
 
   constructor(private provider: string, projectRoot?: string) {
     this.statePath = projectRoot ? join(projectRoot, '.gossip', 'quota-state.json') : null;
     this.load();
+  }
+
+  private isLongLivedCooldown(): boolean {
+    return this.reason === 'spend_cap' || this.reason === 'no_quota';
   }
 
   private load(): void {
@@ -269,6 +284,8 @@ class QuotaTracker {
         this.exhaustedUntil = state[this.provider].exhaustedUntil ?? 0;
         this.consecutive429s = state[this.provider].consecutive429s ?? 0;
         this.reason = state[this.provider].reason ?? 'quota';
+        this.halfOpenAfter = state[this.provider].halfOpenAfter ?? 0;
+        this.halfOpenProbeUsed = state[this.provider].halfOpenProbeUsed ?? false;
       }
     } catch { /* start fresh */ }
   }
@@ -281,14 +298,44 @@ class QuotaTracker {
       // Merge with existing state (other providers may have entries)
       let existing: QuotaStateFile = {};
       try { existing = JSON.parse(readFileSync(this.statePath, 'utf-8')); } catch { /* fresh */ }
-      existing[this.provider] = { exhaustedUntil: this.exhaustedUntil, consecutive429s: this.consecutive429s, reason: this.reason };
+      existing[this.provider] = {
+        exhaustedUntil: this.exhaustedUntil,
+        consecutive429s: this.consecutive429s,
+        reason: this.reason,
+        halfOpenAfter: this.halfOpenAfter,
+        halfOpenProbeUsed: this.halfOpenProbeUsed,
+      };
       writeFileSync(this.statePath, JSON.stringify(existing, null, 2));
     } catch { /* best-effort */ }
+  }
+
+  /** Arm the half-open schedule for a freshly opened long-lived cooldown. */
+  private armHalfOpen(): void {
+    this.halfOpenAfter = Date.now() + HALF_OPEN_MIN_OPEN_MS;
+    this.halfOpenProbeUsed = false;
+  }
+
+  private clearHalfOpen(): void {
+    this.halfOpenAfter = 0;
+    this.halfOpenProbeUsed = false;
   }
 
   /** Check if quota/availability cooldown is active. Throws QuotaExhaustedException if so. */
   checkBeforeRequest(): void {
     if (this.exhaustedUntil > Date.now()) {
+      // Half-open: for 24h spend_cap / no_quota latches, allow exactly one
+      // trial request after HALF_OPEN_MIN_OPEN_MS so a recovered provider can
+      // clear the latch via onSuccess (issue #756). Short cooldowns stay closed.
+      if (
+        this.isLongLivedCooldown() &&
+        !this.halfOpenProbeUsed &&
+        Date.now() >= this.halfOpenAfter
+      ) {
+        this.halfOpenProbeUsed = true;
+        this.persist();
+        _log(this.provider, `half-open probe allowed during ${this.reason} cooldown`);
+        return;
+      }
       const remainingMs = this.exhaustedUntil - Date.now();
       const label =
         this.reason === 'unavailable' ? 'service unavailable'
@@ -317,6 +364,7 @@ class QuotaTracker {
       this.reason = 'spend_cap';
       const cooldownMs = SPEND_CAP_COOLDOWN_MS;
       this.exhaustedUntil = Date.now() + cooldownMs;
+      this.armHalfOpen();
       this.persist();
       _log(this.provider, `429 monthly spend cap (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
       throw new QuotaExhaustedException({
@@ -335,6 +383,7 @@ class QuotaTracker {
       this.reason = 'no_quota';
       const cooldownMs = NO_QUOTA_COOLDOWN_MS;
       this.exhaustedUntil = Date.now() + cooldownMs;
+      this.armHalfOpen();
       this.persist();
       _log(this.provider, `429 zero quota on current plan (${this.consecutive429s}x) — cooling down ${cooldownMs / 1000}s`);
       throw new QuotaExhaustedException({
@@ -381,10 +430,11 @@ class QuotaTracker {
 
   /** Reset on successful response. */
   onSuccess(): void {
-    if (this.consecutive429s > 0 || this.exhaustedUntil > 0) {
+    if (this.consecutive429s > 0 || this.exhaustedUntil > 0 || this.halfOpenProbeUsed || this.halfOpenAfter > 0) {
       this.consecutive429s = 0;
       this.exhaustedUntil = 0;
       this.reason = 'quota';
+      this.clearHalfOpen();
       this.persist();
     }
   }

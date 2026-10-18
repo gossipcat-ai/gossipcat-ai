@@ -1204,6 +1204,132 @@ describe('QuotaTracker spend-cap detection (429)', () => {
     expect(state.consecutive429s).toBe(1);
     expect(Number.isNaN(state.consecutive429s)).toBe(false);
   });
+
+  it('blocks requests immediately after a spend_cap latch (half-open not yet eligible)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () => 'You exceeded its monthly spending cap.',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }])).rejects.toThrow(/monthly spend cap/i);
+
+    // Immediate follow-up must still be blocked — half-open opens only after 1h.
+    (global.fetch as jest.Mock).mockClear();
+    await expect(provider.generate([{ role: 'user', content: 'again' }]))
+      .rejects.toThrow(/monthly spend cap reached/i);
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    const state = read429State();
+    expect(state.halfOpenProbeUsed).toBe(false);
+    expect(state.halfOpenAfter).toBeGreaterThan(Date.now());
+  });
+
+  it('after the half-open delay, one probe is allowed and success clears the latch (issue #756)', async () => {
+    const now = Date.now();
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({
+        google: {
+          exhaustedUntil: now + 20 * 60 * 60 * 1000,
+          consecutive429s: 1,
+          reason: 'spend_cap',
+          // Probe became eligible an hour ago; not yet used.
+          halfOpenAfter: now - 60_000,
+          halfOpenProbeUsed: false,
+        },
+      }),
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: 'recovered' }] }, finishReason: 'STOP' }] }),
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    const result = await provider.generate([{ role: 'user', content: 'probe' }]);
+    expect(result).toBeTruthy();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    const state = read429State();
+    expect(state.exhaustedUntil).toBe(0);
+    expect(state.consecutive429s).toBe(0);
+    expect(state.reason).toBe('quota');
+    expect(state.halfOpenProbeUsed).toBe(false);
+    expect(state.halfOpenAfter).toBe(0);
+  });
+
+  it('a failed half-open probe re-arms the 24h window and blocks until the next delay', async () => {
+    const now = Date.now();
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({
+        google: {
+          exhaustedUntil: now + 20 * 60 * 60 * 1000,
+          consecutive429s: 1,
+          reason: 'spend_cap',
+          halfOpenAfter: now - 60_000,
+          halfOpenProbeUsed: false,
+        },
+      }),
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Map() as any,
+      text: async () => 'You exceeded its monthly spending cap.',
+    }) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    const before = Date.now();
+    await expect(provider.generate([{ role: 'user', content: 'probe' }]))
+      .rejects.toThrow(/monthly spend cap/i);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    const state = read429State();
+    expect(state.reason).toBe('spend_cap');
+    expect(state.consecutive429s).toBe(2);
+    expect(state.halfOpenProbeUsed).toBe(false);
+    // Newly armed half-open delay — not immediately eligible.
+    expect(state.halfOpenAfter).toBeGreaterThan(before + 50 * 60 * 1000);
+    const remaining = state.exhaustedUntil - before;
+    expect(remaining).toBeGreaterThan(23 * 60 * 60 * 1000);
+
+    // Immediate retry must not hit the network again.
+    (global.fetch as jest.Mock).mockClear();
+    await expect(provider.generate([{ role: 'user', content: 'again' }]))
+      .rejects.toThrow(/monthly spend cap reached/i);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('ordinary short quota cooldowns stay hard-closed (no half-open)', async () => {
+    const now = Date.now();
+    mkdirSync(join(projectRoot, '.gossip'), { recursive: true });
+    writeFileSync(
+      join(projectRoot, '.gossip', 'quota-state.json'),
+      JSON.stringify({
+        google: {
+          exhaustedUntil: now + 30_000,
+          consecutive429s: 1,
+          reason: 'quota',
+          halfOpenAfter: now - 60_000,
+          halfOpenProbeUsed: false,
+        },
+      }),
+    );
+
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    const provider = new GeminiProvider('ai-test', 'gemini-pro', projectRoot);
+    await expect(provider.generate([{ role: 'user', content: 'hi' }]))
+      .rejects.toThrow(/quota exhausted/i);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('QuotaTracker no-quota detection (429, issue #732)', () => {
