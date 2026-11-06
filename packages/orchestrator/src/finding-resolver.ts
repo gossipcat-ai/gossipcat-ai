@@ -457,7 +457,8 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     if (touched !== null) {
       let touchedAll = true;
       for (const fc of safeFileCites) {
-        const rel = path.relative(realGitRoot, fc.absPath);
+        // git prints '/'-separated paths on every platform; path.relative uses '\' on Windows.
+        const rel = path.relative(realGitRoot, fc.absPath).split(path.sep).join('/');
         if (!touched.has(rel)) {
           touchedAll = false;
           break;

@@ -2167,7 +2167,7 @@ Return only valid JSON.${skillsBlock}`;
   private isResolvedFromProjectRootOnly(filePath: string): boolean {
     if (this.currentWorktreeRoots.size === 0) return false;
     if (!this.config.projectRoot) return false;
-    if (!filePath.startsWith(resolve(this.config.projectRoot) + '/')) return false;
+    if (!filePath.startsWith(resolve(this.config.projectRoot) + sep)) return false;
     return !this.isInsideAnyRoot(filePath, [...this.currentWorktreeRoots]);
   }
 
@@ -2219,7 +2219,7 @@ Return only valid JSON.${skillsBlock}`;
       if (normalized === normalizedRoot) return true;
       const rel = relative(normalizedRoot, normalized);
       // Inside iff relative path doesn't start with '..' and isn't absolute.
-      return rel !== '' && !rel.startsWith('..' + sep) && rel !== '..' && !rel.startsWith('/');
+      return rel !== '' && !rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel); // isAbsolute: Windows cross-drive relative() is absolute
     });
   }
 
@@ -2522,7 +2522,7 @@ Return only valid JSON.${skillsBlock}`;
               .join('\n');
             let relPath = fullPath;
             for (const root of validRoots) {
-              if (fullPath.startsWith(root + '/')) {
+              if (fullPath.startsWith(root + sep)) {
                 relPath = fullPath.slice(root.length + 1);
                 break;
               }

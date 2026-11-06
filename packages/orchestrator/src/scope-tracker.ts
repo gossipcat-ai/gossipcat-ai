@@ -1,5 +1,8 @@
-import { resolve, relative } from 'path';
+import { resolve, relative, isAbsolute, sep } from 'path';
 import { realpathSync } from 'fs';
+
+// Scope keys are compared with startsWith(), so they must use '/' on every platform.
+const posixSep = (p: string): string => (sep === '/' ? p : p.split(sep).join('/'));
 
 export class ScopeTracker {
   private activeScopes: Map<string, string> = new Map(); // normalized scope → taskId
@@ -28,11 +31,12 @@ export class ScopeTracker {
       try { realSibling = realpathSync(s); } catch { /* declared roots are realpath'd at config load; keep */ }
       const relS = relative(realSibling, real);
       if (relS === '') throw new Error(`Scope "${scope}" resolves to a sibling root — too broad`);
-      if (!relS.startsWith('..') && !relS.startsWith('/') /* '/' guard: Windows cross-drive (path.relative never returns absolute on POSIX) */) {
-        return real.endsWith('/') ? real : real + '/';
+      if (!relS.startsWith('..') && !isAbsolute(relS) /* Windows cross-drive: path.relative returns an absolute path */) {
+        const key = posixSep(real);
+        return key.endsWith('/') ? key : key + '/';
       }
     }
-    const rel = relative(realRoot, real);
+    const rel = posixSep(relative(realRoot, real));
     if (rel.startsWith('..')) throw new Error(`Scope "${scope}" resolves outside project root`);
     if (rel === '') throw new Error(`Scope "${scope}" resolves to project root — too broad`);
     return rel.endsWith('/') ? rel : rel + '/';
