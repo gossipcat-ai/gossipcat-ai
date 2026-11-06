@@ -53,8 +53,10 @@ export function readDashboardKey(cwd: string): string | null {
     fd = openSync(path, 'r');
     const st = fstatSync(fd);
     if (!st.isFile()) return null;
-    // Reject group/other-readable. 0o077 = group+other rwx bits.
-    if ((st.mode & 0o077) !== 0) return null;
+    // Reject group/other-readable. 0o077 = group+other rwx bits. Windows has no
+    // POSIX mode bits (stat reports 0o666), so the check cannot apply there;
+    // access is governed by the NTFS ACL inherited from the project folder.
+    if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) return null;
     if (st.size <= 0 || st.size > AUTH_MAX_READ) return null;
 
     const buf = Buffer.alloc(st.size);

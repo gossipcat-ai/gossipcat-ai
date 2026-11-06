@@ -101,6 +101,7 @@ export class ToolServer {
   private sandbox: Sandbox;
   private allowedCallers: Set<string> | null;
   private agentScopes: Map<string, string> = new Map();   // agentId → scope path
+  private rootUses: Map<string, number> = new Map();      // agentId → running tasks sharing its root
   private agentRoots: Map<string, string> = new Map();    // agentId → worktree root path
   private writeAgents: Set<string> = new Set();            // agents with any write mode active
   private pendingReviews: Map<string, { resolve: (r: string) => void; reject: (e: Error) => void }> = new Map();
@@ -168,10 +169,19 @@ export class ToolServer {
       );
     }
     this.agentRoots.set(agentId, canonical);
+    this.rootUses.set(agentId, (this.rootUses.get(agentId) ?? 0) + 1);
     this.writeAgents.add(agentId);
   }
 
   releaseAgent(agentId: string): void {
+    // The same agent can run two tasks at once: the first to finish must not
+    // pull the root from under the other.
+    const uses = this.rootUses.get(agentId) ?? 0;
+    if (uses > 1) {
+      this.rootUses.set(agentId, uses - 1);
+      return;
+    }
+    this.rootUses.delete(agentId);
     this.agentScopes.delete(agentId);
     this.agentRoots.delete(agentId);
     this.writeAgents.delete(agentId);

@@ -153,7 +153,9 @@ describe('anchor miss diagnostics (#737)', () => {
     // A root whose name carries markup must not be able to forge an <anchor>
     // boundary inside the cross-review prompt.
     const nasty = join(root, 'we"ird<repo>');
-    mkdirSync(nasty, { recursive: true });
+    // Windows cannot create a directory named with " < > — the root need not exist for the
+    // annotation to be built, so only create it where the OS allows.
+    if (process.platform !== 'win32') mkdirSync(nasty, { recursive: true });
     const engine = makeEngine(nasty);
 
     const out = await engine.snippetsForFinding('See src/billing.ts:1');

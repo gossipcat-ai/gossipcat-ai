@@ -39,6 +39,7 @@ export {
   QuotaExhaustedException,
   PROVIDER_PLACEHOLDER_RE,
   isReasoningModel,
+  raiseFetchTimeouts,
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export { recordAuthFailure, clearAuthFailure, readRecentAuthFailures } from './auth-state';
@@ -115,6 +116,7 @@ export {
   tokenize,
   sidecarPath,
   corpusDir,
+  encodeProjectDirName,
   tryAcquireLockOnce,
 } from './memory-index-sidecar';
 export type { MemoryIndex, MemoryIndexDoc, MemoryFrontmatter } from './memory-index-sidecar';

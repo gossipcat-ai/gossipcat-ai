@@ -123,14 +123,14 @@ function warnParseFailure(message: string, sourceLabel?: string): void {
 }
 
 export function parseSkillFrontmatter(content: string, sourceLabel?: string): SkillFrontmatter | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/); // \r?: Windows checkouts are CRLF
   if (!match) {
     // No `---` frontmatter block — a supported format for skills without
     // metadata (see warnParseFailure doc comment). Silent by design.
     return null;
   }
 
-  const lines = match[1].split('\n');
+  const lines = match[1].split(/\r?\n/);
   const fields: Record<string, string> = {};
   const blockSequences: Record<string, string[]> = {};
   let activeBlockKey: string | null = null;

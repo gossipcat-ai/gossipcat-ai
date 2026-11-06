@@ -1,3 +1,11 @@
+/** Windows needs a privilege to make symlinks; without it these tests can't run. */
+const canLink = (make: () => void): boolean => {
+  try { make(); return true; } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EPERM') return false;
+    throw e;
+  }
+};
+
 import { Sandbox } from '@gossip/tools';
 import { mkdirSync, writeFileSync, symlinkSync, unlinkSync, existsSync, realpathSync } from 'fs';
 import { resolve } from 'path';
@@ -54,7 +62,7 @@ describe('Sandbox', () => {
   it('blocks symlinks pointing outside project', () => {
     const linkPath = resolve(testDir, 'escape-link');
     try {
-      symlinkSync('/etc', linkPath);
+      if (!canLink(() => symlinkSync('/etc', linkPath))) return;
       expect(() => sandbox.validatePath('escape-link/passwd')).toThrow('outside project root');
     } finally {
       if (existsSync(linkPath)) unlinkSync(linkPath);

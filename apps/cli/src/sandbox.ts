@@ -488,7 +488,7 @@ function normalizeScope(scope: string, projectRoot: string): string {
   } else if (s.startsWith('./')) {
     s = s.slice(2);
   }
-  s = normalize(s).replace(/\/+$/, '');
+  s = toPosixSep(normalize(s)).replace(/\/+$/, '');
   if (s === '.' || s === '') return '';
   return s;
 }
@@ -499,10 +499,11 @@ function normalizeScope(scope: string, projectRoot: string): string {
  */
 export function isInsideScope(filePath: string, scope: string): boolean {
   if (!scope) return true;
-  const f = normalize(filePath).replace(/^\.\//, '');
-  const s = scope.replace(/^\.\//, '').replace(/\/+$/, '');
+  // normalize() yields '\' on Windows while scopes are written with '/'; compare in one form.
+  const f = toPosixSep(normalize(filePath)).replace(/^\.\//, '');
+  const s = toPosixSep(scope).replace(/^\.\//, '').replace(/\/+$/, '');
   if (f === s) return true;
-  return f.startsWith(s + '/') || f.startsWith(s + sep);
+  return f.startsWith(s + '/');
 }
 
 export interface AuditViolation {
@@ -987,11 +988,17 @@ function tmpRootPrefixes(): string[] {
  * `/var/folders/xx/T`, the path `/var/folders/xx/T/jest_dx-AB/sub/f.txt`
  * yields `jest_dx-AB`.
  */
+/** Windows paths use '\'; the noise rules below are written with '/'. No-op on POSIX. */
+function toPosixSep(p: string): string {
+  return sep === '/' ? p : p.split(sep).join('/');
+}
+
 function tmpdirChildSegment(canonPath: string, tmpRoots: string[]): string | null {
+  const canon = toPosixSep(canonPath);
   for (const root of tmpRoots) {
-    const prefix = root.replace(/\/+$/, '') + '/';
-    if (canonPath.startsWith(prefix)) {
-      const rest = canonPath.slice(prefix.length);
+    const prefix = toPosixSep(root).replace(/\/+$/, '') + '/';
+    if (canon.startsWith(prefix)) {
+      const rest = canon.slice(prefix.length);
       const slash = rest.indexOf('/');
       return slash === -1 ? rest : rest.slice(0, slash);
     }
@@ -1038,12 +1045,13 @@ export function isLayer3MainNoise(
   // anchored so a tmpdir path like `/tmp/dist-mcp/evil` or `/tmp/x.tsbuildinfo`
   // (tmpdir is a scan root) can NEVER be suppressed. Fail-closed when
   // projectRoot is absent — an unanchored match would mask real escapes.
+  const posixPath = toPosixSep(canonPath);
   if (
     opts.projectRoot &&
-    canonPath.startsWith(opts.projectRoot + '/') &&
-    (canonPath.includes('/dist-mcp/') ||
-      canonPath.includes('/dist-dashboard/') ||
-      canonPath.endsWith('.tsbuildinfo'))
+    posixPath.startsWith(toPosixSep(opts.projectRoot) + '/') &&
+    (posixPath.includes('/dist-mcp/') ||
+      posixPath.includes('/dist-dashboard/') ||
+      posixPath.endsWith('.tsbuildinfo'))
   ) {
     return true;
   }

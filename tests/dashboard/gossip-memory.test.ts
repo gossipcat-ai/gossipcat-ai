@@ -98,7 +98,7 @@ Session body here.
 
   it('gossipMemoryDir resolves under project root (never under ~/.claude)', () => {
     const dir = gossipMemoryDir('/some/project');
-    expect(dir).toBe('/some/project/.gossip/memory');
+    expect(dir).toBe(join('/some/project', '.gossip', 'memory'));
     expect(dir).not.toContain('.claude/projects');
   });
 });
@@ -212,8 +212,8 @@ body
 
 describe('separation invariant', () => {
   it('gossipMemoryDir always resolves to the project root, never the user home', () => {
-    expect(gossipMemoryDir('/projects/foo')).toBe('/projects/foo/.gossip/memory');
-    expect(gossipMemoryDir('/Users/x/projects/y')).toBe('/Users/x/projects/y/.gossip/memory');
+    expect(gossipMemoryDir('/projects/foo')).toBe(join('/projects/foo', '.gossip', 'memory'));
+    expect(gossipMemoryDir('/Users/x/projects/y')).toBe(join('/Users/x/projects/y', '.gossip', 'memory'));
     // The native (Claude Code) auto-memory path lives under ~/.claude/projects;
     // gossipMemoryDir must never produce something under that tree.
     expect(gossipMemoryDir('/p').includes('.claude/projects')).toBe(false);

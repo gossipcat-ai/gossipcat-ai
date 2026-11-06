@@ -630,7 +630,7 @@ export function loadClaudeSubagents(projectRoot?: string, existingIds?: Set<stri
     const filePath = join(agentsDir, file);
     try {
       const content = readFileSync(filePath, 'utf-8');
-      const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+      const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
       if (!frontmatter) continue;
 
       const fm = frontmatter[1];
@@ -650,7 +650,7 @@ export function loadClaudeSubagents(projectRoot?: string, existingIds?: Set<stri
       if (existingIds?.has(id)) continue;
 
       // Instructions = everything after the frontmatter
-      const instructions = content.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+      const instructions = content.replace(/^---\r?\n[\s\S]*?\n---(?:\r?\n)*/, '').trim();
 
       agents.push({
         id,

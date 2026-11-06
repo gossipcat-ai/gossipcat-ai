@@ -240,7 +240,7 @@ export class AgentMemoryReader {
       }
       // Body = content minus frontmatter; strip inject delimiters (mirror of loadMemory :31).
       const body = content
-        .replace(/^---\n[\s\S]*?\n---\n*/, '')
+        .replace(/^---\r?\n[\s\S]*?\n---(?:\r?\n)*/, '')
         .replace(/<\/?(?:agent-memory|system|instructions)>/gi, '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -278,7 +278,7 @@ export class AgentMemoryReader {
         const warmth = this.calculateWarmth(frontmatter.importance, frontmatter.lastAccessed);
         const relevance = this.calculateRelevance(frontmatter.description, lower);
         // Also score body content (first 200 chars after frontmatter)
-        const bodyStart = content.replace(/^---[\s\S]*?---\n*/, '').slice(0, 200).toLowerCase();
+        const bodyStart = content.replace(/^---[\s\S]*?---(?:\r?\n)*/, '').slice(0, 200).toLowerCase();
         const bodyRelevance = this.calculateRelevance(bodyStart, lower);
         const combinedRelevance = relevance * 0.7 + bodyRelevance * 0.3;
         if (combinedRelevance > 0) {
@@ -333,7 +333,7 @@ export class AgentMemoryReader {
   }
 
   private parseFrontmatter(content: string): { name: string; description: string; importance: number; lastAccessed: string; accessCount: number; status?: string } | null {
-    const match = content.match(/^---\n([\s\S]*?)\n---/);
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!match) return null;
     const lines = match[1].split('\n');
     const obj: Record<string, string> = {};

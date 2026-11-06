@@ -3,9 +3,10 @@ import { testRound } from '../../packages/orchestrator/src/round-context';
 import { AgentConfig, TaskEntry } from '../../packages/orchestrator/src/types';
 import { ILLMProvider, LLMGenerateOptions } from '../../packages/orchestrator/src/llm-client';
 import { LLMMessage } from '@gossip/types';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { trySymlink } from '../helpers/symlink';
 
 describe('ConsensusEngine Security', () => {
   let engine: ConsensusEngine;
@@ -113,7 +114,7 @@ describe('ConsensusEngine Security', () => {
     try {
       // Symlink inside the valid root pointing to the outside dir.
       const linkPath = join(realTmpRoot, 'escape');
-      symlinkSync(realOutside, linkPath);
+      if (!trySymlink(realOutside, linkPath)) return; // Windows without symlink privilege
 
       // Construct the engine (no projectRoot; we probe isInsideAnyRoot
       // directly with an ad-hoc root).

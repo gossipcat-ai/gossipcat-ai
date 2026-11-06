@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { encodeProjectDirName } from '@gossip/orchestrator';
 
 /**
  * Native memory API — exposes Claude Code's project-scoped auto-memory directory
@@ -43,7 +44,7 @@ export type NativeMemoryResponse = AutoMemoryResponse;
  *  to `os.homedir()`. */
 export function autoMemoryDir(projectRoot: string, home?: string): string {
   const h = home ?? homedir();
-  return join(h, '.claude', 'projects', projectRoot.replaceAll('/', '-'), 'memory');
+  return join(h, '.claude', 'projects', encodeProjectDirName(projectRoot), 'memory');
 }
 
 export async function autoMemoryHandler(projectRoot: string, home?: string): Promise<AutoMemoryResponse> {

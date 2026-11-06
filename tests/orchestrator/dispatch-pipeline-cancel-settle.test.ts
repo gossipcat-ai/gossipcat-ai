@@ -12,7 +12,7 @@ import { DispatchPipeline } from '../../packages/orchestrator/src/dispatch-pipel
 describe('DispatchPipeline post-cancel settlement', () => {
   let root: string;
   beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'dp-cancel-')); mkdirSync(join(root, '.gossip')); });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
   function gatedWorker(lateEvent: boolean) {
     let release!: () => void;

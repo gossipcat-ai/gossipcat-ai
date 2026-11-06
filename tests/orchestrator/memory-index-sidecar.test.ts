@@ -295,7 +295,7 @@ describe('sidecarPath and atomic write behavior', () => {
 
   it('sidecarPath returns path under .gossip/', () => {
     const result = sidecarPath('/some/project');
-    expect(result).toBe('/some/project/.gossip/memory-index.json');
+    expect(result).toBe(join('/some/project', '.gossip', 'memory-index.json'));
   });
 
   it('rebuildIndex writes via atomic tmp+rename and leaves no stray .tmp', () => {
@@ -303,6 +303,8 @@ describe('sidecarPath and atomic write behavior', () => {
     const originalHome = process.env.HOME;
     const fakeHome = join(tmpdir(), `gossip-fakehome-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env.HOME = fakeHome;
+    const originalProfile = process.env.USERPROFILE; // os.homedir() reads USERPROFILE on Windows
+    process.env.USERPROFILE = fakeHome;
     try {
       const corpus = corpusDir(projectRoot);
       mkdirSync(corpus, { recursive: true });
@@ -315,6 +317,7 @@ describe('sidecarPath and atomic write behavior', () => {
       expect(existsSync(`${idxPath}.tmp`)).toBe(false);
     } finally {
       process.env.HOME = originalHome;
+      if (originalProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = originalProfile;
       rmSync(fakeHome, { recursive: true, force: true });
     }
   });
@@ -323,6 +326,8 @@ describe('sidecarPath and atomic write behavior', () => {
     const originalHome = process.env.HOME;
     const fakeHome = join(tmpdir(), `gossip-fakehome-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env.HOME = fakeHome;
+    const originalProfile = process.env.USERPROFILE; // os.homedir() reads USERPROFILE on Windows
+    process.env.USERPROFILE = fakeHome;
     try {
       const corpus = corpusDir(projectRoot);
       mkdirSync(corpus, { recursive: true });
@@ -340,6 +345,7 @@ describe('sidecarPath and atomic write behavior', () => {
       expect(existsSync(`${idxPath}.tmp`)).toBe(false);
     } finally {
       process.env.HOME = originalHome;
+      if (originalProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = originalProfile;
       rmSync(fakeHome, { recursive: true, force: true });
     }
   });
@@ -698,7 +704,7 @@ describe('prototype-key collision in index maps', () => {
   let corpus: string;
   beforeEach(() => {
     projectRoot = makeProjectDir();
-    corpus = join(homedir(), '.claude', 'projects', projectRoot.replace(/\//g, '-'), 'memory');
+    corpus = corpusDir(projectRoot);
     mkdirSync(corpus, { recursive: true });
   });
   afterEach(() => {

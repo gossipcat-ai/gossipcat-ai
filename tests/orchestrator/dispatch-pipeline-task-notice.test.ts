@@ -24,7 +24,7 @@ describe('relay task completion notices', () => {
     mkdirSync(join(root, '.gossip'));
     inbox = new ClaudeInbox(inboxDirFor(root));
   });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
   const baseWorker = { cancelTask: jest.fn(), subscribeToBatch: jest.fn().mockResolvedValue(undefined), unsubscribeFromBatch: jest.fn().mockResolvedValue(undefined) };
   const okWorker = (result = RESULT) => ({

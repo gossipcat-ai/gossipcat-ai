@@ -51,7 +51,7 @@ export interface OverviewResponse {
 function readSkillStatus(path: string): string | null {
   try {
     const content = readFileSync(path, 'utf-8');
-    const m = content.match(/^---\n([\s\S]*?)\n---/);
+    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!m) return null;
     const block = m[1];
     for (const line of block.split('\n')) {

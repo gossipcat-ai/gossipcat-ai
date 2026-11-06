@@ -39,7 +39,8 @@ describe('DashboardAuth persistence (issue #548 item 3a)', () => {
     const path = authFile(root);
     expect(existsSync(path)).toBe(true);
     // Lower 9 permission bits should be 0o600 (owner read/write only).
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX mode bits.
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it('prunes expired sessions on init() instead of wiping the key', () => {

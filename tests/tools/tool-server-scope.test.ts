@@ -1,3 +1,11 @@
+/** Windows needs a privilege to make symlinks; without it these tests can't run. */
+const canLink = (make: () => void): boolean => {
+  try { make(); return true; } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EPERM') return false;
+    throw e;
+  }
+};
+
 import { jest } from '@jest/globals';
 const vi = jest;
 import * as fs from 'fs';
@@ -161,7 +169,7 @@ describe('ToolServer scope enforcement', () => {
     it('blocks file_read through a symlink that escapes scope', async () => {
       // Plant a symlink inside scope pointing at an out-of-scope file
       const linkPath = path.join(projectRoot, 'packages/relay/escape.ts');
-      fs.symlinkSync(path.join(projectRoot, 'packages/tools/secret.ts'), linkPath);
+      if (!canLink(() => fs.symlinkSync(path.join(projectRoot, 'packages/tools/secret.ts'), linkPath))) return;
       await expect(
         server.executeTool('file_read', { path: 'packages/relay/escape.ts' }, 'agent-1')
       ).rejects.toThrow(/outside scope/);
@@ -170,7 +178,7 @@ describe('ToolServer scope enforcement', () => {
     it('blocks file_write through a symlinked parent that escapes scope', async () => {
       // Symlink an in-scope directory name to an out-of-scope directory
       const linkDir = path.join(projectRoot, 'packages/relay/bounce');
-      fs.symlinkSync(path.join(projectRoot, 'packages/tools'), linkDir);
+      if (!canLink(() => fs.symlinkSync(path.join(projectRoot, 'packages/tools'), linkDir))) return;
       await expect(
         server.executeTool('file_write', { path: 'packages/relay/bounce/evil.ts', content: 'x' }, 'agent-1')
       ).rejects.toThrow(/outside scope/);
@@ -355,7 +363,7 @@ describe('ToolServer scope enforcement', () => {
       // membership check.
       const link = path.join(wtRoot, 'bounce');
       try {
-        fs.symlinkSync('/etc', link);
+        if (!canLink(() => fs.symlinkSync('/etc', link))) return;
       } catch {
         // On some CI filesystems symlink creation may fail; skip gracefully.
         return;

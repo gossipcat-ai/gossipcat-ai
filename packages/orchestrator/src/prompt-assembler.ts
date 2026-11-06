@@ -91,7 +91,7 @@ export type SpecStatus = 'proposal' | 'implemented' | 'retired';
 export function parseSpecFrontMatter(content: string): { status?: SpecStatus } {
   // Front matter must start at the very beginning of the file
   if (!content.startsWith('---')) return {};
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
+  const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n/);
   if (!match) return {};
   const body = match[1];
   const statusMatch = body.match(/^\s*status\s*:\s*["']?([a-z_-]+)["']?\s*(?:#.*)?$/m);

@@ -15,7 +15,7 @@ import { formatSkillPayload, formatSkillNotFound } from '@gossip/tools';
 import { isReservedAgentId } from '../../apps/cli/src/reserved-ids';
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
-const SDK_SOURCE = readFileSync(join(PROJECT_ROOT, 'apps', 'cli', 'src', 'mcp-server-sdk.ts'), 'utf8');
+const SDK_SOURCE = readFileSync(join(PROJECT_ROOT, 'apps', 'cli', 'src', 'mcp-server-sdk.ts'), 'utf8').replace(/\r\n/g, '\n'); // checkout may be CRLF
 
 /** Slice the source of the gossip_skill_query registration block. */
 function skillQueryBlock(): string {

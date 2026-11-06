@@ -244,7 +244,7 @@ describe('roundCounter — persistence (Option C)', () => {
 
   it('ROFS file-only readonly: fallback continues to accumulate across bump cycles', () => {
     // Skip when running as root.
-    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return; // Windows: chmod does not make a dir/file read-only
 
     const gossipDir = path.join(tmpDir, '.gossip');
 
@@ -961,7 +961,7 @@ describe('roundCounter — partial-flush atomicity + backfill cap (f1, f3, f4)',
   }
 
   it('partial-flush retry does not double-count: 5 ROFS bumps + partial recovery + full recovery = no duplicates', () => {
-    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return; // Windows: chmod does not make a dir/file read-only
 
     const gossipDir = path.join(tmpDir, '.gossip');
 
@@ -1015,7 +1015,7 @@ describe('roundCounter — partial-flush atomicity + backfill cap (f1, f3, f4)',
   });
 
   it('MAX_BACKFILL_PER_BUMP caps loop at 100 records per bump; remainder drains on next bump', () => {
-    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return; // Windows: chmod does not make a dir/file read-only
 
     const gossipDir = path.join(tmpDir, '.gossip');
 
@@ -1050,7 +1050,7 @@ describe('roundCounter — partial-flush atomicity + backfill cap (f1, f3, f4)',
   });
 
   it('crash recovery via __resetForTests after partial flush: JSONL holds exactly the persisted records, fbk is gone', () => {
-    if (typeof process.getuid === 'function' && process.getuid() === 0) return;
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) return; // Windows: chmod does not make a dir/file read-only
 
     const gossipDir = path.join(tmpDir, '.gossip');
 

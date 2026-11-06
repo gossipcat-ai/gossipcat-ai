@@ -1,7 +1,8 @@
 import { ScopeTracker } from '../../packages/orchestrator/src/scope-tracker';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { trySymlink } from '../helpers/symlink';
 
 describe('ScopeTracker', () => {
   let tracker: ScopeTracker;
@@ -53,7 +54,7 @@ describe('ScopeTracker', () => {
     it('rejects symlink that escapes project root', () => {
       const outsideDir = mkdtempSync(join(tmpdir(), 'scope-outside-'));
       try {
-        symlinkSync(outsideDir, join(projectRoot, 'packages', 'escape-link'));
+        if (!trySymlink(outsideDir, join(projectRoot, 'packages', 'escape-link'))) return; // Windows without symlink privilege
         expect(() => tracker.register('packages/escape-link/', 'task-1'))
           .toThrow('resolves outside project root');
       } finally {
@@ -62,10 +63,7 @@ describe('ScopeTracker', () => {
     });
 
     it('allows symlink that stays within project root', () => {
-      symlinkSync(
-        join(projectRoot, 'packages', 'relay'),
-        join(projectRoot, 'packages', 'relay-alias'),
-      );
+      if (!trySymlink(join(projectRoot, 'packages', 'relay'), join(projectRoot, 'packages', 'relay-alias'))) return; // Windows without symlink privilege
       expect(() => tracker.register('packages/relay-alias/', 'task-1')).not.toThrow();
     });
   });

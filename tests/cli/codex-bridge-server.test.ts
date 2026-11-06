@@ -10,6 +10,7 @@ async function start():Promise<ChildProcess>{
 }
 async function stop(child:ChildProcess){await new Promise<void>(r=>{child.once('exit',()=>r());child.kill('SIGTERM');});}
 async function wait(id:string){for(let i=0;i<100;i++){const job=await codexBridgeRequest(root,'GET','/jobs/'+id);if(job.terminal)return job;await new Promise(r=>setTimeout(r,20));}throw new Error('job timeout');}
+(process.platform==='win32'?describe.skip:describe)('codex bridge server (POSIX daemon)',()=>{
 beforeEach(async()=>{
  root=mkdtempSync(join(tmpdir(),'codex-server-'));bundle=join(root,'server.js');
  execFileSync(resolve('node_modules/.bin/esbuild'),[resolve('apps/cli/src/codex-bridge-server.ts'),'--bundle','--platform=node','--target=node22','--external:re2','--external:bufferutil','--external:utf-8-validate','--outfile='+bundle,'--tsconfig='+resolve('tsconfig.json')],{stdio:'pipe'});
@@ -51,4 +52,5 @@ test('stale or reused-pid owner locks do not block startup',async()=>{
   writeFileSync(lock,content);server=await start();expect(JSON.parse(readFileSync(lock,'utf8')).pid).toBe(server.pid);await stop(server);
  }
  server=await start();
+});
 });

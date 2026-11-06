@@ -95,7 +95,7 @@ function sameKeywords(a: readonly string[], b: readonly string[]): boolean {
  * `keywords:` key, so the caller can skip it rather than inventing one.
  */
 export function rewriteKeywordsFrontmatter(raw: string, keywords: readonly string[]): string | null {
-  const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+  const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fm) return null;
 
   const block = fm[1];

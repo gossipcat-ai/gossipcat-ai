@@ -147,7 +147,7 @@ function atomicWrite(path: string, content: string): void {
   let fd: number | undefined;
   try {
     writeFileSync(tmp, content, 'utf-8');
-    fd = openSync(tmp, 'r');
+    fd = openSync(tmp, 'r+'); // 'r+': Windows FlushFileBuffers needs write access (EPERM on a read-only handle)
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;

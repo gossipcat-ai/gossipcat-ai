@@ -37,7 +37,8 @@ describe('readDashboardKey — P1#4 hardening', () => {
     expect(readDashboardKey(dir)).toBeNull();
   });
 
-  it('fails open when the file is group/other-readable (reject (mode & 0o077) !== 0)', () => {
+  // Windows has no POSIX mode bits, so a 0o644 file cannot be created there.
+  (process.platform === 'win32' ? it.skip : it)('fails open when the file is group/other-readable (reject (mode & 0o077) !== 0)', () => {
     writeAuth(dir, JSON.stringify({ version: 1, key: VALID_KEY, sessions: [] }), 0o644);
     expect(readDashboardKey(dir)).toBeNull();
   });

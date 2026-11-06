@@ -6,12 +6,13 @@
  * TLS-specific coverage lives in http-bridge-tls.test.ts (PR-C).
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHttpBridgeServer, BridgeConfigError } from '@gossip/orchestrator/http-bridge-server';
 import type { HttpBridgeServer } from '@gossip/orchestrator/http-bridge-server';
 import * as http from 'http';
+import { trySymlink } from '../helpers/symlink';
 
 // ─── Test harness ───────────────────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ describe('HTTP bridge: scope', () => {
     try {
       await withBridge(async ({ url, token, projectRoot }) => {
         // Plant a symlink inside scope pointing out of scope.
-        symlinkSync(join(outside, 'secret.txt'), join(projectRoot, 'leak.txt'));
+        if (!trySymlink(join(outside, 'secret.txt'), join(projectRoot, 'leak.txt'))) return; // Windows without symlink privilege
         const res = await req('POST', `${url}/file-read`, { token, body: { path: 'leak.txt' } });
         expect(res.status).toBe(403);
         expect(res.body.code).toBe('scope_violation');
@@ -197,7 +198,7 @@ describe('HTTP bridge: scope', () => {
     mkdirSync(join(outside, 'target'));
     try {
       await withBridge(async ({ url, token, projectRoot }) => {
-        symlinkSync(join(outside, 'target'), join(projectRoot, 'trojan'));
+        if (!trySymlink(join(outside, 'target'), join(projectRoot, 'trojan'))) return; // Windows without symlink privilege
         const res = await req('POST', `${url}/file-write`, {
           token,
           body: { path: 'trojan/new.txt', content: 'escaped' },

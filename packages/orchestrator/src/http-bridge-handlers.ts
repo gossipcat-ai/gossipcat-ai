@@ -14,7 +14,7 @@ import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { readFile, writeFile, stat, readdir, mkdir } from 'fs/promises';
 import { statSync } from 'fs';
-import { resolve, join, relative, dirname } from 'path';
+import { resolve, join, relative, dirname, isAbsolute } from 'path';
 import { canonicalizeForBoundary, validatePathInScope } from '@gossip/tools';
 import { RateLimiter } from './rate-limiter';
 
@@ -72,7 +72,7 @@ function looksBinary(buf: Buffer): boolean {
 }
 
 function resolveInScope(rec: TokenRecord, reqPath: string): { ok: true; path: string } | { ok: false; msg: string } {
-  if (reqPath.startsWith('/')) return { ok: false, msg: 'absolute paths are rejected' };
+  if (reqPath.startsWith('/') || isAbsolute(reqPath)) return { ok: false, msg: 'absolute paths are rejected' };
   const joined = resolve(rec.scope, reqPath);
   const canonical = canonicalizeForBoundary(joined);
   if (!validatePathInScope(rec.scope, canonical)) {

@@ -8,9 +8,10 @@
  */
 import { ConsensusEngine } from '../../packages/orchestrator/src/consensus-engine';
 import { testRound } from '../../packages/orchestrator/src/round-context';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { trySymlink } from '../helpers/symlink';
 
 const makeLlm = (): any => ({
   generate: jest.fn(async () => ({ text: '[]', usage: { inputTokens: 0, outputTokens: 0 } })),
@@ -128,7 +129,7 @@ describe('ConsensusEngine — absolute citation paths (#660)', () => {
     const realRepo = join(root, 'realrepo');
     const linkRepo = join(root, 'linkrepo');
     mkdirSync(realRepo, { recursive: true });
-    symlinkSync(realRepo, linkRepo);
+    if (!trySymlink(realRepo, linkRepo)) return; // Windows without symlink privilege
     const wt = join(linkRepo, '.claude', 'worktrees', 'wt-1');
     mkdirSync(wt, { recursive: true });
     const target = writeFileAt(join(wt, 'packages', 'a', 'branch-only.ts'));
@@ -189,7 +190,7 @@ describe('ConsensusEngine — absolute citation paths (#660)', () => {
     const victimDir = join(root, 'victim');
     mkdirSync(join(victimDir, 'nested'), { recursive: true });
     writeFileSync(join(victimDir, 'creds.ts'), 'const SECRET = "sk-EXFILTRATED";\n');
-    symlinkSync(join(victimDir, 'nested'), join(repo, 'link'));
+    if (!trySymlink(join(victimDir, 'nested'), join(repo, 'link'))) return; // Windows without symlink privilege
     const engine = makeEngine(repo);
 
     const escape = repo + '/link/../creds.ts';
@@ -202,7 +203,7 @@ describe('ConsensusEngine — absolute citation paths (#660)', () => {
     const victimDir = join(root, 'victim2');
     mkdirSync(victimDir, { recursive: true });
     writeFileSync(join(victimDir, 'leak.ts'), 'const SECRET = "leaked";\n');
-    symlinkSync(victimDir, join(repo, 'out'));
+    if (!trySymlink(victimDir, join(repo, 'out'))) return; // Windows without symlink privilege
     const engine = makeEngine(repo);
 
     expect(await engine.resolveFilePath(join(repo, 'out', 'leak.ts'))).toBeNull();

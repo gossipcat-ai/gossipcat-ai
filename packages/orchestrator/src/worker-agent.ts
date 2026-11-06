@@ -295,6 +295,7 @@ export class WorkerAgent {
       let lastToolSig = '';   // signature of last tool call for repetition detection
       let repeatCount = 0;    // consecutive identical tool calls
       let consecutiveErrors = 0; // consecutive turns where ALL tool calls return errors
+      let findingsNudged = false;
       let providerRetryAttempted = false; // one retry per dispatch for provider-side placeholders
 
       for (let turn = 0; turn < this.maxToolTurns; turn++) {
@@ -369,6 +370,20 @@ export class WorkerAgent {
 
         if (response.text) {
             yield { type: TaskStreamEventType.PARTIAL_RESULT, payload: { text: response.text }, timestamp: Date.now() };
+        }
+
+        // A review that ends in working notes looks like a clean review. Ask once.
+        const text = response.text ?? '';
+        const expectsFindings = messages.some(m => typeof m.content === 'string' && m.content.includes('<agent_finding'));
+        if (
+          !response.toolCalls?.length && expectsFindings && !findingsNudged
+          && !text.includes('<agent_finding') && !/\b(?:no (?:issues|findings|defects|problems)|nothing (?:found|wrong))\b/i.test(text)
+        ) {
+          findingsNudged = true;
+          yield logAndYield(`turn ${turn} — no findings and no "nothing found", asking once more`);
+          messages.push({ role: 'assistant', content: text });
+          messages.push({ role: 'user', content: 'Your reply has no <agent_finding> tags. Give your final report now as <agent_finding> tags, or say "No findings" if you checked and found none.' });
+          continue;
         }
 
         if (!response.toolCalls?.length) {

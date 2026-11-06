@@ -30,6 +30,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 
 import { withResolverLock } from './file-lock';
+import { encodeProjectDirName } from './memory-index-sidecar';
 import { appendChainedEntry, readAuditEntries, type AuditEntry } from './audit-log-chain';
 
 const FINDINGS_FILENAME = 'implementation-findings.jsonl';
@@ -457,7 +458,8 @@ function runUnderLock(projectRoot: string, opts: ResolveOptions): ResolveResult 
     if (touched !== null) {
       let touchedAll = true;
       for (const fc of safeFileCites) {
-        const rel = path.relative(realGitRoot, fc.absPath);
+        // git prints '/'-separated paths on every platform; path.relative uses '\' on Windows.
+        const rel = path.relative(realGitRoot, fc.absPath).split(path.sep).join('/');
         if (!touched.has(rel)) {
           touchedAll = false;
           break;
@@ -800,7 +802,7 @@ const PATH_REJECT_REASONS = {
  */
 export function isAutoMemoryPath(projectRoot: string, citedPath: string): boolean {
   if (!citedPath || !path.isAbsolute(citedPath)) return false;
-  const encoded = projectRoot.replace(/\//g, '-');
+  const encoded = encodeProjectDirName(projectRoot);
   // Claude Code encodes leading '/' as leading '-', so encoded starts with '-'
   const memoryDir = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory') + path.sep;
   return citedPath.startsWith(memoryDir) || citedPath === memoryDir.slice(0, -1);

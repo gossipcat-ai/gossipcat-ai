@@ -31,7 +31,7 @@ interface RunResult {
 function mkRepo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iagate-'));
   execSync('git init -q -b master', { cwd: dir });
-  execSync('git config user.email t@t.com && git config user.name t', { cwd: dir, shell: '/bin/sh' });
+  execSync('git config user.email t@t.com && git config user.name t', { cwd: dir });
   // Copy the gate script to the same relative path as production.
   fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
   fs.copyFileSync(SCRIPT_SRC, path.join(dir, 'scripts', 'impact-adjacency-gate.mjs'));
@@ -40,7 +40,7 @@ function mkRepo(): string {
   fs.writeFileSync(path.join(dir, '.github', 'workflows', 'impact-adjacency-gate.yml'), 'placeholder\n');
   // Seed an initial commit so we have a base ref.
   fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
-  execSync('git add -A && git commit -q -m base', { cwd: dir, shell: '/bin/sh' });
+  execSync('git add -A && git commit -q -m base', { cwd: dir });
   return dir;
 }
 
@@ -49,7 +49,7 @@ function baseSha(dir: string): string {
 }
 
 function commitAll(dir: string, msg: string): void {
-  execSync(`git add -A && git commit -q -m ${JSON.stringify(msg)}`, { cwd: dir, shell: '/bin/sh' });
+  execSync(`git add -A && git commit -q -m ${JSON.stringify(msg)}`, { cwd: dir });
 }
 
 function runGate(dir: string, env: Record<string, string> = {}): RunResult {

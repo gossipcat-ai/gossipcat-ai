@@ -12,7 +12,7 @@ import {
   rmSync,
 } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
+import { join, resolve, sep } from 'path';
 import { execSync } from 'child_process';
 import {
   relativizeProjectPaths,
@@ -394,9 +394,11 @@ describe('buildAuditExclusions', () => {
 
   it('always includes .gossip, .claude, and .git', () => {
     const exclusions = buildAuditExclusions(root, undefined, undefined);
-    expect(exclusions).toContain(resolve(root, '.gossip'));
-    expect(exclusions).toContain(resolve(root, '.claude'));
-    expect(exclusions).toContain(resolve(root, '.git'));
+    // Exclusions are built with '/' joins (find -path); compare separator-insensitively.
+    const posix = exclusions.map(e => e.split(sep).join('/'));
+    for (const d of ['.gossip', '.claude', '.git']) {
+      expect(posix).toContain(resolve(root, d).split(sep).join('/'));
+    }
   });
 });
 

@@ -24,14 +24,16 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 const mode = (p: string): number => statSync(p).mode & 0o777;
+// Windows has no POSIX permission bits (stat reports 0o666/0o444), so mode assertions are POSIX-only.
+const posix = process.platform !== 'win32';
 
 describe('ClaudeInbox — append + perms', () => {
   it('persists a queued record with dir 0700 / file 0600 and no tmp leftovers', () => {
     const e = inbox.append('chat-1', 'hello');
     expect(e.status).toBe('queued');
     expect(e.id).toMatch(/^\d{13}-[0-9a-f]{12}$/);
-    expect(mode(inboxDirFor(root))).toBe(0o700);
-    expect(mode(join(inboxDirFor(root), `${e.id}.json`))).toBe(0o600);
+    if (posix) expect(mode(inboxDirFor(root))).toBe(0o700);
+    if (posix) expect(mode(join(inboxDirFor(root), `${e.id}.json`))).toBe(0o600);
     expect(readdirSync(inboxDirFor(root)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     // A fresh instance (another process) reads it back from disk.
     const other = new ClaudeInbox(inboxDirFor(root));
@@ -137,7 +139,7 @@ describe('ClaudeInbox — status transitions', () => {
     expect(inbox.get(e.id)).toEqual(expect.objectContaining({ status: 'delivered', delivered_via: 'wait' }));
     expect(inbox.mark(e.id, 'answered')).toBe(true);
     expect(inbox.get(e.id)?.status).toBe('answered');
-    expect(mode(join(inboxDirFor(root), `${e.id}.answered`))).toBe(0o600);
+    if (posix) expect(mode(join(inboxDirFor(root), `${e.id}.answered`))).toBe(0o600);
   });
 
   it('two store instances racing on the same marker: exactly one wins', () => {
@@ -203,8 +205,8 @@ describe('watcher heartbeat + computeClaudeLink', () => {
 
     const now = Date.now();
     writeWatcherHeartbeat(root, now);
-    expect(mode(watcherConsumerPathFor(root))).toBe(0o600);
-    expect(mode(watchersDirFor(root))).toBe(0o700);
+    if (posix) expect(mode(watcherConsumerPathFor(root))).toBe(0o600);
+    if (posix) expect(mode(watchersDirFor(root))).toBe(0o700);
     expect(readWatcherHeartbeat(root)?.pid).toBe(process.pid);
     expect(isWatcherListening(root, now)).toBe(true);
     expect(computeClaudeLink({ hasSink: false, channelConfirmed: false, projectRoot: root, now }).state).toBe('listening');
@@ -218,7 +220,7 @@ describe('watcher heartbeat + computeClaudeLink', () => {
     writeWatcherHeartbeat(root, now);
     clearWatcherHeartbeat(root, 0, now + 1000);
     expect(existsSync(watcherConsumerPathFor(root))).toBe(false); // can never read as live
-    expect(mode(watcherExitPathFor(root))).toBe(0o600);
+    if (posix) expect(mode(watcherExitPathFor(root))).toBe(0o600);
     const link = computeClaudeLink({ hasSink: true, channelConfirmed: false, projectRoot: root, now: now + 5000 });
     expect(link).toMatchObject({ state: 'recent', last_exit: new Date(now + 1000).toISOString() });
     const stale = computeClaudeLink({ hasSink: true, channelConfirmed: false, projectRoot: root, now: now + 1000 + WATCHER_RECENT_MS + 1 });

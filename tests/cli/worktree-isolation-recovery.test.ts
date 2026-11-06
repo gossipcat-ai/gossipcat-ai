@@ -60,6 +60,7 @@ describe('preserveLeakedPaths — real git repo', () => {
     git(repo, ['config', 'user.email', 'test@example.com']);
     git(repo, ['config', 'user.name', 'Test']);
     git(repo, ['config', 'commit.gpgsign', 'false']);
+    git(repo, ['config', 'core.autocrlf', 'false']); // a global autocrlf=true would make git apply write CRLF
   }
 
   function writeFile(rel: string, content: string): void {

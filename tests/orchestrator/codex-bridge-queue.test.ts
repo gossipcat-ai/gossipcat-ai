@@ -9,7 +9,7 @@ const tick=()=>new Promise(r=>setTimeout(r,10));
 test('persists result and deduplicates identical task ID across restart',async()=>{
  let calls=0;const runner:BridgeRunner=(_job,_thread,emit)=>({promise:(async()=>{calls++;emit({type:'log' as any,payload:JSON.stringify({threadId:'thread-1'}),timestamp:0});emit({type:'final_result' as any,payload:{result:'verified'},timestamp:0});})(),cancel:()=>{}});
  const q=new CodexBridgeQueue(dir,runner);q.submit(input('one'));await tick();expect(q.get('one')?.status).toBe('completed');
- const restored=new CodexBridgeQueue(dir,runner);restored.submit(input('one'));restored.start();await tick();expect(calls).toBe(1);expect(restored.get('one')?.terminal?.payload.result).toBe('verified');expect(statSync(join(dir,'job-one.json')).mode&0o777).toBe(0o600);
+ const restored=new CodexBridgeQueue(dir,runner);restored.submit(input('one'));restored.start();await tick();expect(calls).toBe(1);expect(restored.get('one')?.terminal?.payload.result).toBe('verified');if(process.platform!=='win32')expect(statSync(join(dir,'job-one.json')).mode&0o777).toBe(0o600);
 });
 test('runs tasks serially and resumes the previous agent thread',async()=>{
  const received:any[]=[];let release!:()=>void;

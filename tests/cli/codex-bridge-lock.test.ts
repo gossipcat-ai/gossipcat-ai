@@ -5,18 +5,20 @@ import {spawn} from 'child_process';
 import {acquireOwnerLock,parseLock,isLiveOwner,processStartTime} from '../../apps/cli/src/codex-bridge-lock';
 let dir:string,lock:string;
 beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'codex-lock-'));lock=join(dir,'owner.pid');});afterEach(()=>rmSync(dir,{recursive:true,force:true}));
+// Owner identity comes from ps(1); the Codex bridge daemon is POSIX-only (unix socket), so these two are skipped on Windows.
+const testPosix=process.platform==='win32'?test.skip:test;
 test('parseLock accepts only positive integer pids and complete records',()=>{
  for(const bad of ['','  ','abc','0','-1','1.5','{"pid":0,"startedAt":"x","token":"t"}','{"pid":"12","startedAt":"x","token":"t"}','{"pid":12}'])expect(parseLock(bad)).toBeUndefined();
  expect(parseLock('42\n')).toEqual({pid:42});expect(parseLock('{"pid":7,"startedAt":"s","token":"t"}')).toEqual({pid:7,startedAt:'s',token:'t'});
 });
-test('acquires atomically with identity, blocks a live owner, releases only its own lock',()=>{
+testPosix('acquires atomically with identity, blocks a live owner, releases only its own lock',()=>{
  const owner=acquireOwnerLock(lock);const record=JSON.parse(readFileSync(lock,'utf8'));
  expect(record).toEqual({pid:process.pid,startedAt:processStartTime(process.pid),token:owner.token});
  expect(()=>acquireOwnerLock(lock)).toThrow('already running');
  expect(readdirSync(dir).filter(n=>n.endsWith('.tmp'))).toEqual([]);
  writeFileSync(lock,JSON.stringify({...record,token:'someone-else'}));owner.release();expect(existsSync(lock)).toBe(true);
 });
-test('treats empty, invalid, dead and reused pids as stale',async()=>{
+testPosix('treats empty, invalid, dead and reused pids as stale',async()=>{
  const child=spawn('sleep',['30']);await new Promise(r=>child.once('spawn',r));const pid=child.pid!;
  try {
   expect(isLiveOwner({pid})).toBe(false); // legacy plain pid: live, but not a bridge process

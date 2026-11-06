@@ -718,7 +718,7 @@ Requirements:
   }
 
   private validateSkillContent(content: string): void {
-    if (!content.match(/^---\n[\s\S]*?\n---/)) {
+    if (!content.match(/^---\r?\n[\s\S]*?\n---/)) {
       throw new Error('Generated skill missing frontmatter. LLM output did not follow the required format.');
     }
     for (const section of REQUIRED_SECTIONS) {
@@ -1257,7 +1257,7 @@ ${inputs.join('\n')}
     frontmatter: Record<string, string | number>;
     body: string;
   } {
-    const match = raw.match(/^---\n([\s\S]*?)\n---(\n[\s\S]*)?$/);
+    const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n[\s\S]*)?$/);
     if (!match) {
       return { frontmatter: {}, body: raw };
     }

@@ -3,6 +3,7 @@
  *
  * Spec: docs/superpowers/specs/2026-05-21-consensus-auto-verify-design.md.
  */
+import { resolve } from 'path';
 import {
   autoVerifyUnverifiedFindings,
   buildVerifierPrompt,
@@ -83,7 +84,7 @@ describe('buildSafePath', () => {
     const root = '/tmp/proj';
     const result = buildSafePath(root, 'src/x.ts');
     // either '/tmp/proj/src/x.ts' or '(invalid_path)' depending on validatePath rules
-    expect(result === '/tmp/proj/src/x.ts' || result === '(invalid_path)').toBe(true);
+    expect(result === resolve(root, 'src/x.ts') || result === '(invalid_path)').toBe(true);
   });
   test('path traversal → (invalid_path)', () => {
     expect(buildSafePath('/tmp/proj', '../../etc/passwd')).toBe('(invalid_path)');
