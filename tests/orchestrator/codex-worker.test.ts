@@ -6,11 +6,13 @@ import { configToAgentConfigs, validateConfig } from '../../apps/cli/src/config'
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'gossip-codex-')); });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+// fake() writes a shebang script; Windows cannot exec it (spawn refuses .cmd shims too), so tests that run it are POSIX-only.
+const testPosix = process.platform === 'win32' ? test.skip : test;
 function fake(code: string) { const path = join(root, 'codex'); writeFileSync(path, '#!/usr/bin/env node\n' + code, { mode: 0o755 }); return path; }
 async function run(worker: CodexWorker) { const events = []; for await (const e of worker.executeTask('inspect', 'context', 'skills', 'task-1', undefined, root)) events.push(e); return events; }
 const success = `console.log(JSON.stringify({type:'thread.started',thread_id:'thread-1'}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({status:'completed',result:'file.ts:12 explanation'})}}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:2,output_tokens:3}}));`;
-test('isolates auth, passes model/cwd/context and returns mapped result', async () => {
+testPosix('isolates auth, passes model/cwd/context and returns mapped result', async () => {
  const cli = fake(`let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{require('fs').writeFileSync('capture.json',JSON.stringify({args:process.argv.slice(2),input,key:process.env.OPENAI_API_KEY}));${success}});`);
  const prior = process.env.OPENAI_API_KEY; process.env.OPENAI_API_KEY = 'not-a-real-secret';
  try {
@@ -20,11 +22,11 @@ test('isolates auth, passes model/cwd/context and returns mapped result', async 
  expect(captured.key).toBeUndefined(); expect(captured.args).toContain('read-only'); expect(captured.args).toContain('gpt-6.1-sol'); expect(captured.input).toContain('context'); expect(captured.input).toContain('skills');
  } finally { if (prior === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = prior; }
 });
-test('nonzero exit cannot turn a completed event into success', async () => { expect((await run(new CodexWorker('a','',fake(success+'process.exit(9);')))).at(-1)?.type).toBe('error'); });
-test('turn failure returns task error', async () => { expect((await run(new CodexWorker('a','',fake(`console.log(JSON.stringify({type:'turn.failed',error:{message:'model unavailable'}}));`)))).at(-1)).toMatchObject({type:'error',payload:{error:'model unavailable'}}); });
+testPosix('nonzero exit cannot turn a completed event into success', async () => { expect((await run(new CodexWorker('a','',fake(success+'process.exit(9);')))).at(-1)?.type).toBe('error'); });
+testPosix('turn failure returns task error', async () => { expect((await run(new CodexWorker('a','',fake(`console.log(JSON.stringify({type:'turn.failed',error:{message:'model unavailable'}}));`)))).at(-1)).toMatchObject({type:'error',payload:{error:'model unavailable'}}); });
 test('spawn failure returns task error', async () => { expect((await run(new CodexWorker('a','',join(root,'missing')))).at(-1)?.type).toBe('error'); });
-test('timeout kills process and reports failure', async () => { expect((await run(new CodexWorker('a','',fake('setInterval(()=>{},1000);'),100))).at(-1)).toMatchObject({type:'error',payload:{error:'Codex task timeout'}}); });
-test('cancellation terminates in-flight task', async () => {
+testPosix('timeout kills process and reports failure', async () => { expect((await run(new CodexWorker('a','',fake('setInterval(()=>{},1000);'),100))).at(-1)).toMatchObject({type:'error',payload:{error:'Codex task timeout'}}); });
+testPosix('cancellation terminates in-flight task', async () => {
  const w = new CodexWorker('a','',fake('setInterval(()=>{},1000);'));
  const it = w.executeTask('inspect','','','task-1',undefined,root); await it.next(); w.cancelTask('task-1','Cancelled by user');
  const events=[]; for await (const e of it) events.push(e); expect(events.at(-1)).toMatchObject({type:'error',payload:{error:'Cancelled by user'}});
@@ -50,7 +52,7 @@ test('pipeline rejects a prohibited mode before spawning', () => {
  expect(()=>p.dispatch('a','write',{writeMode:'worktree'})).toThrow('read-only');
 });
 
-test('model-reported task failure is not successful completion', async () => {
+testPosix('model-reported task failure is not successful completion', async () => {
  const output = `console.log(JSON.stringify({type:'thread.started',thread_id:'thread-1'}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({status:'failed',result:'source inaccessible'})}}));console.log(JSON.stringify({type:'turn.completed'}));`;
  expect((await run(new CodexWorker('a','',fake(output)))).at(-1)).toMatchObject({type:'error',payload:{error:'source inaccessible'}});
 });
@@ -58,6 +60,8 @@ test('model-reported task failure is not successful completion', async () => {
 test('child env is an allowlist: auth/config/locale kept, host secrets dropped', async () => {
  const env = codexChildEnv({PATH:'/bin',HOME:'/h',CODEX_HOME:'/h/.codex',LC_ALL:'tr_TR.UTF-8',HTTPS_PROXY:'http://p',ANTHROPIC_API_KEY:'x',GITHUB_TOKEN:'y',OPENAI_API_KEY:'z',GOSSIP_RELAY_KEY:'w',NODE_OPTIONS:'--require evil'});
  expect(env).toEqual({PATH:'/bin',HOME:'/h',CODEX_HOME:'/h/.codex',LC_ALL:'tr_TR.UTF-8',HTTPS_PROXY:'http://p'});
+});
+testPosix('child env allowlist holds inside the spawned process', async () => {
  const cli = fake(`process.stdin.resume();process.stdin.on('end',()=>{require('fs').writeFileSync('env.json',JSON.stringify(Object.keys(process.env)));${success}});`);
  const prior = process.env.GITHUB_TOKEN; process.env.GITHUB_TOKEN = 'not-a-real-secret';
  try {
