@@ -138,7 +138,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 function readSource(relPath: string): string {
-  return readFileSync(resolve(__dirname, '../../', relPath), 'utf8');
+  return readFileSync(resolve(__dirname, '../../', relPath), 'utf8').replace(/\r\n/g, '\n'); // checkout may be CRLF
 }
 
 describe('relay-verbatim-banner — site 1: gossip_skills utility banner (mcp-server-sdk.ts)', () => {

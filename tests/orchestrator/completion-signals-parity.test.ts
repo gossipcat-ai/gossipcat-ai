@@ -11,7 +11,7 @@
  * and removed signals must be pruned from the allowlist.
  */
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { join, relative, sep } from 'path';
 import * as ts from 'typescript';
 import {
   COMPLETION_SIGNAL_ALLOWLIST,
@@ -212,7 +212,7 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
     function scanFile(file: string): void {
       const source = readFileSync(file, 'utf8');
       const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-      const rel = relative(repoRoot, file);
+      const rel = relative(repoRoot, file).split(sep).join('/'); // repo-relative, '/'-separated on every OS
       const isPerformanceWriter = rel.endsWith('packages/orchestrator/src/performance-writer.ts');
       visit(sf);
 
@@ -322,7 +322,7 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
 
     for (const root of scanRoots) {
       for (const file of walkTsFiles(root)) {
-        const rel = relative(repoRoot, file);
+        const rel = relative(repoRoot, file).split(sep).join('/'); // repo-relative, '/'-separated on every OS
         if (exempt.has(rel)) continue;
         const source = readFileSync(file, 'utf8');
         const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
@@ -404,7 +404,7 @@ describe('completion-signals parity (Layer 1 drift guard)', () => {
 
     for (const root of scanRoots) {
       for (const file of walkTsFiles(root)) {
-        const rel = relative(repoRoot, file);
+        const rel = relative(repoRoot, file).split(sep).join('/'); // repo-relative, '/'-separated on every OS
         if (exempt.has(rel)) continue;
         const source = readFileSync(file, 'utf8');
         const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
