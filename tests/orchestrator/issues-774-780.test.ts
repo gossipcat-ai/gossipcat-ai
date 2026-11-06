@@ -1,5 +1,6 @@
 import { createServer } from 'http';
 import type { AddressInfo } from 'net';
+import { ToolServer } from '@gossip/tools';
 import { isReasoningModel, OpenAIProvider, createProvider } from '@gossip/orchestrator';
 
 /** Local OpenAI-compatible server answering after delayMs with status/body. */
@@ -40,6 +41,18 @@ describe('gossipcat issues 774-780', () => {
     const cloud = createProvider('openai', 'm', 'k') as unknown as { timeoutMs: number };
     expect(local.timeoutMs).toBe(600_000);
     expect(cloud.timeoutMs).toBe(120_000);
+  });
+
+  it('#778 keeps a root until the last concurrent task of an agent ends', () => {
+    const t = new ToolServer({ relayUrl: 'ws://127.0.0.1:1', projectRoot: process.cwd() }) as unknown as {
+      assignRoot(a: string, r: string): void; releaseAgent(a: string): void; agentRoots: Map<string, string>;
+    };
+    t.assignRoot('a', process.cwd());
+    t.assignRoot('a', process.cwd());
+    t.releaseAgent('a');
+    expect(t.agentRoots.has('a')).toBe(true);
+    t.releaseAgent('a');
+    expect(t.agentRoots.has('a')).toBe(false);
   });
 
   it('#777 names the fix for a context-size rejection', async () => {
