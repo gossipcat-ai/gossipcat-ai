@@ -6,8 +6,17 @@
  * (never block).
  */
 import { spawnSync } from 'child_process';
-import { resolve, join } from 'path';
+import { resolve, join, delimiter } from 'path';
 import { existsSync } from 'fs';
+
+// Two environment prerequisites of these POSIX hook scripts:
+//  - python3 must actually run (on Windows `python3` is usually the Microsoft Store stub);
+//  - a PATH holding only the system dirs, with bash still reachable (on Windows: Git's usr/bin dir).
+const hasPython3 = spawnSync('python3', ['-c', '']).status === 0;
+const itPython3 = hasPython3 ? it : it.skip;
+const SYSTEM_PATH = process.platform === 'win32'
+  ? (process.env.PATH ?? '').split(delimiter).find((d) => /git/i.test(d) && existsSync(join(d, 'bash.exe'))) ?? ''
+  : '/usr/bin:/bin';
 
 // Resolve scripts from repo root — mirrors findDisciplineHook candidate order.
 const DISCIPLINE_DIR = resolve(process.cwd(), 'assets', 'hooks', 'discipline');
@@ -84,19 +93,19 @@ describe('session-start-bootstrap.sh — inbox wiring', () => {
   afterAll(() => rmSync(bin, { recursive: true, force: true }));
 
   it('appends `gossipcat inbox session-start` output when gossipcat is on PATH', () => {
-    const { stdout, status } = runScript(script, '', { ...process.env, PATH: `${bin}:/usr/bin:/bin` });
+    const { stdout, status } = runScript(script, '', { ...process.env, PATH: `${bin}${delimiter}${SYSTEM_PATH}` });
     expect(status).toBe(0);
     expect(stdout).toContain('gossip_status()');
     expect(stdout).toContain('STUB:inbox:session-start');
   });
 
   it('GOSSIPCAT_INBOX_HOOK=0 disables the inbox section', () => {
-    const { stdout } = runScript(script, '', { ...process.env, PATH: `${bin}:/usr/bin:/bin`, GOSSIPCAT_INBOX_HOOK: '0' });
+    const { stdout } = runScript(script, '', { ...process.env, PATH: `${bin}${delimiter}${SYSTEM_PATH}`, GOSSIPCAT_INBOX_HOOK: '0' });
     expect(stdout).not.toContain('STUB:');
   });
 
   it('a missing gossipcat binary is silent and exits 0', () => {
-    const { stdout, stderr, status } = runScript(script, '', { ...process.env, PATH: '/usr/bin:/bin' });
+    const { stdout, stderr, status } = runScript(script, '', { ...process.env, PATH: SYSTEM_PATH });
     expect(status).toBe(0);
     expect(stderr).toBe('');
     expect(stdout).not.toContain('[gossipcat inbox]');
@@ -128,7 +137,7 @@ describe('pretool-signals-validate.sh', () => {
     expect(stderr).toBe(''); // no warning for parallel mode
   });
 
-  it('warns on stderr when signal lacks finding_id and consensus_id is present', () => {
+  itPython3('warns on stderr when signal lacks finding_id and consensus_id is present', () => {
     const input = JSON.stringify({
       tool_name: 'mcp__gossipcat__gossip_signals',
       tool_input: {
@@ -145,7 +154,7 @@ describe('pretool-signals-validate.sh', () => {
     expect(stderr).toContain('signal #1');
   });
 
-  it('warns only for signals missing finding_id — not those that have it', () => {
+  itPython3('warns only for signals missing finding_id — not those that have it', () => {
     const input = JSON.stringify({
       tool_name: 'mcp__gossipcat__gossip_signals',
       tool_input: {
@@ -166,7 +175,7 @@ describe('pretool-signals-validate.sh', () => {
     expect(stderr).not.toContain('signal #3');
   });
 
-  it('detects consensus_id on individual signal entries (not only top-level)', () => {
+  itPython3('detects consensus_id on individual signal entries (not only top-level)', () => {
     const input = JSON.stringify({
       tool_name: 'mcp__gossipcat__gossip_signals',
       tool_input: {
@@ -205,7 +214,7 @@ describe('posttool-collect-reminder.sh', () => {
     expect(status).toBe(0);
   });
 
-  it('outputs signal-recording reminder when consensus === true', () => {
+  itPython3('outputs signal-recording reminder when consensus === true', () => {
     const input = JSON.stringify({
       tool_name: 'mcp__gossipcat__gossip_collect',
       tool_input: { consensus: true },
