@@ -255,7 +255,7 @@ Check endpoints.`;
     const defaultSkillsDir = resolve(__dirname, '../../packages/orchestrator/src/default-skills');
     const frontmatterSkills = readdirSync(defaultSkillsDir)
       .filter(f => f.endsWith('.md'))
-      .filter(f => readFileSync(join(defaultSkillsDir, f), 'utf8').startsWith('---\n'));
+      .filter(f => readFileSync(join(defaultSkillsDir, f), 'utf8').match(/^---\r?\n/));
 
     it('has at least one frontmatter-bearing default skill to check', () => {
       expect(frontmatterSkills.length).toBeGreaterThan(0);

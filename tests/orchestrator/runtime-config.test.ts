@@ -439,19 +439,16 @@ it('readFlagsFile: ENOENT returns empty record (no throw)', async () => {
 });
 
 it('readFlagsFile: non-ENOENT error is thrown (fail-loud)', async () => {
-  // Write a file and then make it unreadable to force a non-ENOENT error.
+  // A directory at the flags path makes readFileSync fail with EISDIR on every
+  // platform (chmod 000 does not block reads on Windows).
   writeFlags({ GOSSIP_TEST_FLAG: '1' });
   const flagsPath = path.join(workDir, '.gossip', 'runtime-flags.json');
-  fs.chmodSync(flagsPath, 0o000);
+  fs.rmSync(flagsPath);
+  fs.mkdirSync(flagsPath);
 
-  try {
-    const { getRuntimeFlag } = await freshImport();
-    // Should throw because the file exists but can't be read (EACCES).
-    expect(() => getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toThrow();
-  } finally {
-    // Restore permissions so afterEach cleanup can delete the file.
-    fs.chmodSync(flagsPath, 0o644);
-  }
+  const { getRuntimeFlag } = await freshImport();
+  // Should throw because the path exists but can't be read as a file (non-ENOENT).
+  expect(() => getRuntimeFlag('GOSSIP_TEST_FLAG', undefined, TEST_REGISTRY)).toThrow();
 });
 
 // ── DI-seam falsification tests (spec §Test coverage, R3-MEDIUM-B) ───────

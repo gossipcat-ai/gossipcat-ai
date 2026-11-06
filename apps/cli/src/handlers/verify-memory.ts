@@ -8,7 +8,7 @@
 // directly so the verdict pipeline can be exercised without spawning Agents.
 
 import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
-import { resolve, isAbsolute } from 'node:path';
+import { resolve, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 
 export type Verdict = 'FRESH' | 'STALE' | 'CONTRADICTED' | 'INCONCLUSIVE';
@@ -87,8 +87,8 @@ export function validateInputs(
   try { autoMemoryRoot = realpathSync(resolve(opts.autoMemoryRoot ?? `${homedir()}/.claude/projects`)); }
   catch { autoMemoryRoot = resolve(opts.autoMemoryRoot ?? `${homedir()}/.claude/projects`); }
 
-  const inCwd = realPath === cwdAbs || realPath.startsWith(cwdAbs + '/');
-  const inAutoMemory = realPath === autoMemoryRoot || realPath.startsWith(autoMemoryRoot + '/');
+  const inCwd = realPath === cwdAbs || realPath.startsWith(cwdAbs + sep);
+  const inAutoMemory = realPath === autoMemoryRoot || realPath.startsWith(autoMemoryRoot + sep);
   if (!inCwd && !inAutoMemory) {
     return { ok: false, evidence: 'path outside allowed roots' };
   }

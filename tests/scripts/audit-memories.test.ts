@@ -121,7 +121,7 @@ describe('proposeTarget', () => {
 describe('defaultMemoryDir', () => {
   it('encodes cwd by replacing slashes and dropping leading dash', () => {
     const dir = mod.defaultMemoryDir('/Users/alice/code/proj', '/home/alice');
-    expect(dir).toBe('/home/alice/.claude/projects/Users-alice-code-proj/memory');
+    expect(dir).toBe(path.join('/home/alice', '.claude', 'projects', 'Users-alice-code-proj', 'memory'));
   });
 });
 
@@ -154,7 +154,7 @@ describe('resolveProjectRoot', () => {
       throw new Error('unexpected');
     };
     const dir = mod.defaultMemoryDir('/Users/alice/code/proj/.claude/worktrees/agent-XXXX', '/home/alice', fakeExec);
-    expect(dir).toBe('/home/alice/.claude/projects/Users-alice-code-proj/memory');
+    expect(dir).toBe(path.join('/home/alice', '.claude', 'projects', 'Users-alice-code-proj', 'memory'));
   });
 
   it('falls back to cwd when all git commands fail', () => {

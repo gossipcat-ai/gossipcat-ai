@@ -13,7 +13,7 @@
  *     "did this ever run?" is observable without log scraping
  */
 import { existsSync, readdirSync, realpathSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import type { SkillEngine } from '@gossip/orchestrator';
 import { invalidateAgent as invalidateDispatchPromptCacheForAgent } from './dispatch-prompt-cache';
 
@@ -107,8 +107,8 @@ export async function runCheckEffectivenessForAllSkills(opts: RunnerOptions): Pr
       try {
         canonicalSkillsDir = realpathSync(skillsDir);
       } catch { continue; }
-      // canonicalBaseDir is already absolute from realpathSync; trailing '/' prevents prefix collisions like '/agents-evil/'
-      if (!canonicalSkillsDir.startsWith(canonicalBaseDir + '/')) {
+      // canonicalBaseDir is already absolute from realpathSync; trailing separator prevents prefix collisions like '/agents-evil/'
+      if (!canonicalSkillsDir.startsWith(canonicalBaseDir + sep)) {
         process.stderr.write(`[gossipcat] checkEffectiveness: skipping ${agentId} — skillsDir resolved outside agents tree (canonical=${canonicalSkillsDir})\n`);
         continue;
       }
