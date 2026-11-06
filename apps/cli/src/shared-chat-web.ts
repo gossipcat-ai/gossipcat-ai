@@ -1,6 +1,6 @@
 import {createServer,request,IncomingMessage,ServerResponse,Server} from 'http';
 import {readFileSync,writeFileSync,existsSync,statSync} from 'fs';
-import {join,resolve,extname} from 'path';
+import {join,resolve,extname,sep} from 'path';
 import {codexChatHistory,sendCodexChat} from '@gossip/relay';
 
 const MAX_CHAT_BODY=64_000;
@@ -76,7 +76,7 @@ export function startSharedChatWeb(root:string){
     upstream.on('error',()=>{if(!res.headersSent)json(res,502,{error:'Gossipcat relay unavailable'});else res.end();});req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);return;
    }
    const assets=resolve(root,'dist-dashboard');const path=resolve(assets,decodeURIComponent(url.pathname.replace(/^\/dashboard\/?/,'')));
-   if(path!==assets&&!path.startsWith(assets+'/')){res.writeHead(404);res.end();return;}
+   if(path!==assets&&!path.startsWith(assets+sep)){res.writeHead(404);res.end();return;}
    const file=existsSync(path)&&statSync(path).isFile()?path:join(assets,'index.html');
    const types:Record<string,string>={'.html':'text/html','.js':'text/javascript','.css':'text/css','.woff2':'font/woff2','.svg':'image/svg+xml','.png':'image/png'};
    res.writeHead(200,{'Content-Type':types[extname(file)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(readFileSync(file));
