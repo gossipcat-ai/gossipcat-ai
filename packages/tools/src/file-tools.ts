@@ -1,5 +1,5 @@
 import { readFile, writeFile, readdir, stat, mkdir, unlink } from 'fs/promises';
-import { resolve, relative, join } from 'path';
+import { sep, resolve, relative, join } from 'path';
 import { existsSync, realpathSync } from 'fs';
 import RE2 from 're2';
 import { Sandbox } from './sandbox';
@@ -67,6 +67,8 @@ export class FileTools {
     const root = agentRoot || this.sandbox.projectRoot;
     await this.walkDir(root, args.pattern, results, 0, 10);
     if (results.length === 0) return 'No files found';
+    // Same paths on every platform: agents and citations use '/'.
+    if (process.platform === 'win32') results.forEach((r, i) => { results[i] = r.split(String.fromCharCode(92)).join('/'); });
     // Optional ranking: when resolutionRoots are supplied (cross-review path
     // disambiguation, see apps/cli/src/handlers/collect.ts), prefer matches
     // whose absolute path sits inside one of those roots, then matches under
@@ -98,14 +100,14 @@ export class FileTools {
       let placed = false;
       for (let i = 0; i < absRoots.length; i++) {
         const r = absRoots[i];
-        if (abs === r || abs.startsWith(r.endsWith('/') ? r : r + '/')) {
+        if (abs === r || abs.startsWith(r.endsWith(sep) ? r : r + sep)) {
           bucketed[i].push(rel);
           placed = true;
           break;
         }
       }
       if (placed) continue;
-      if (abs === projectRoot || abs.startsWith(projectRoot.endsWith('/') ? projectRoot : projectRoot + '/')) {
+      if (abs === projectRoot || abs.startsWith(projectRoot.endsWith(sep) ? projectRoot : projectRoot + sep)) {
         projectBucket.push(rel);
       } else {
         otherBucket.push(rel);

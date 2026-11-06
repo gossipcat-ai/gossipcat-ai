@@ -39,6 +39,8 @@ export function canonicalizeForBoundary(p: string): string {
       try { out = join(realpathSync(parent), basename(out)); } catch { /* best-effort */ }
     }
   }
+  // Windows: the trailing '/' below only marks a boundary if the separators match it.
+  if (process.platform === 'win32') out = out.replace(/\\/g, '/');
   if (CASE_INSENSITIVE_FS) out = out.toLowerCase();
   return out.endsWith('/') ? out : out + '/';
 }

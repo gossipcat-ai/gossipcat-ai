@@ -1,4 +1,4 @@
-import { resolve, dirname, sep } from 'path';
+import { resolve, dirname, sep, isAbsolute } from 'path';
 import { existsSync, realpathSync } from 'fs';
 
 /**
@@ -100,8 +100,13 @@ export class Sandbox {
       if (foldedFull.startsWith(rootWithSlash(foldedRoot))) return fullReal;
     }
 
+    // A path written relative to the project, not the agent's root, is still fine
+    // if it lands inside an allowed root: the checks above run again on it.
+    if (allowedRoots.length > 0 && !isAbsolute(filePath)) {
+      return this.validatePath(resolve(this.root, filePath), allowedRoots);
+    }
     const msg = allowedRoots.length > 0
-      ? `Path "${filePath}" resolves outside project root or agent root`
+      ? `Path "${filePath}" resolves outside project root or agent root (relative paths start at ${resolutionBase})`
       : `Path "${filePath}" resolves outside project root`;
     throw new Error(msg);
   }

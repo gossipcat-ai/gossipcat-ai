@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import type { AddressInfo } from 'net';
-import { ToolServer } from '@gossip/tools';
+import { resolve } from 'path';
+import { Sandbox, ToolServer } from '@gossip/tools';
 import { isReasoningModel, OpenAIProvider, createProvider } from '@gossip/orchestrator';
 
 /** Local OpenAI-compatible server answering after delayMs with status/body. */
@@ -53,6 +54,13 @@ describe('gossipcat issues 774-780', () => {
     expect(t.agentRoots.has('a')).toBe(true);
     t.releaseAgent('a');
     expect(t.agentRoots.has('a')).toBe(false);
+  });
+
+  it('#778 finds a project-relative path inside an agent root, and names the base when it fails', () => {
+    const sb = new Sandbox(process.cwd());
+    const inside = resolve(process.cwd(), 'packages');
+    expect(sb.validatePath('packages/tools/src/sandbox.ts', [inside])).toContain('sandbox.ts');
+    expect(() => sb.validatePath('../../../outside.ts', [inside])).toThrow(/relative paths start at/);
   });
 
   it('#777 names the fix for a context-size rejection', async () => {
