@@ -7,7 +7,7 @@
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import {
   validateResolutionRoot,
   parseWorktreePorcelain,
@@ -134,9 +134,9 @@ describe('parseWorktreePorcelain', () => {
     // /a is the only non-locked non-bare; /b /c skipped. realpath best-effort
     // returns input when the path does not exist.
     expect(paths.length).toBeGreaterThanOrEqual(1);
-    expect(paths.some((p) => p.endsWith('/a') || p === '/a')).toBe(true);
-    expect(paths.some((p) => p.endsWith('/b'))).toBe(false);
-    expect(paths.some((p) => p.endsWith('/c'))).toBe(false);
+    expect(paths.some((p) => p.endsWith(sep + 'a') || p === '/a')).toBe(true);
+    expect(paths.some((p) => p.endsWith(sep + 'b'))).toBe(false);
+    expect(paths.some((p) => p.endsWith(sep + 'c'))).toBe(false);
   });
 
   it('Test 7 (locked with reason) — skipped', () => {
@@ -150,15 +150,15 @@ describe('parseWorktreePorcelain', () => {
     const recNormal = ['worktree /normal-wt', 'HEAD deadbeef', 'branch refs/heads/main'].join('\0');
     const stdout = [recLocked, recBare, recNormal].join('\0\0');
     const paths = parseWorktreePorcelain(stdout, { includeLocked: true });
-    expect(paths.some((p) => p.endsWith('/locked-wt'))).toBe(true);
-    expect(paths.some((p) => p.endsWith('/normal-wt'))).toBe(true);
-    expect(paths.some((p) => p.endsWith('/bare-wt'))).toBe(false);
+    expect(paths.some((p) => p.endsWith(sep + 'locked-wt'))).toBe(true);
+    expect(paths.some((p) => p.endsWith(sep + 'normal-wt'))).toBe(true);
+    expect(paths.some((p) => p.endsWith(sep + 'bare-wt'))).toBe(false);
   });
 
   it('handles trailing \\0\\0 gracefully', () => {
     const rec = ['worktree /z', 'HEAD abc'].join('\0') + '\0\0';
     const paths = parseWorktreePorcelain(rec);
-    expect(paths.some((p) => p.endsWith('/z'))).toBe(true);
+    expect(paths.some((p) => p.endsWith(sep + 'z'))).toBe(true);
   });
 
   it('caps output at 100 entries', () => {

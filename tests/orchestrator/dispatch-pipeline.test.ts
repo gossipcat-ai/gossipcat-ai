@@ -439,7 +439,7 @@ describe('DispatchPipeline', () => {
     const path = require('path');
 
     it('rotates file when over max entries', () => {
-      const tmpDir = '/tmp/gossip-rotation-test-' + Date.now();
+      const tmpDir = require('path').join(require('os').tmpdir(), 'gossip-rotation-test-' + Date.now());
       fs.mkdirSync(path.join(tmpDir, '.gossip'), { recursive: true });
       const filePath = path.join(tmpDir, '.gossip', 'test.jsonl');
 
@@ -461,11 +461,11 @@ describe('DispatchPipeline', () => {
       expect(JSON.parse(remaining[0]).id).toBe(110);
       expect(JSON.parse(remaining[99]).id).toBe(209);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); // Windows: the fire-and-forget git prune from the constructor may still hold the cwd
     });
 
     it('does not rotate when under the cap', () => {
-      const tmpDir = '/tmp/gossip-rotation-norot-' + Date.now();
+      const tmpDir = require('path').join(require('os').tmpdir(), 'gossip-rotation-norot-' + Date.now());
       fs.mkdirSync(path.join(tmpDir, '.gossip'), { recursive: true });
       const filePath = path.join(tmpDir, '.gossip', 'test.jsonl');
 
@@ -483,7 +483,7 @@ describe('DispatchPipeline', () => {
       const content = fs.readFileSync(filePath, 'utf-8').trim();
       expect(content.split('\n').length).toBe(50);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); // Windows: the fire-and-forget git prune from the constructor may still hold the cwd
     });
 
     it('handles missing file gracefully', () => {
@@ -644,7 +644,7 @@ describe('DispatchPipeline', () => {
     }
 
     it('removes the task record from relay-tasks.json the moment a relay task completes', async () => {
-      const tmpDir = '/tmp/gossip-prune-completed-' + Date.now();
+      const tmpDir = require('path').join(require('os').tmpdir(), 'gossip-prune-completed-' + Date.now());
       const p = new DispatchPipeline({
         projectRoot: tmpDir,
         workers: new Map([['test-agent', mockWorker('ok')]]),
@@ -668,11 +668,11 @@ describe('DispatchPipeline', () => {
       // not a blanket rewrite from getRunningTaskRecords().
       expect(tasks.find((t) => t.id === 'unrelated-task')).toBeDefined();
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); // Windows: the fire-and-forget git prune from the constructor may still hold the cwd
     });
 
     it('removes the task record from relay-tasks.json when a relay task fails', async () => {
-      const tmpDir = '/tmp/gossip-prune-failed-' + Date.now();
+      const tmpDir = require('path').join(require('os').tmpdir(), 'gossip-prune-failed-' + Date.now());
       const failingWorker = {
         executeTask: jest.fn().mockImplementation(async function* () {
           yield { type: 'error', payload: { error: 'boom' }, timestamp: Date.now() };
@@ -696,11 +696,11 @@ describe('DispatchPipeline', () => {
       const { tasks } = readRelayTasksFile(tmpDir);
       expect(tasks.find((t) => t.id === taskId)).toBeUndefined();
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); // Windows: the fire-and-forget git prune from the constructor may still hold the cwd
     });
 
     it('is a no-op (does not throw) when relay-tasks.json does not exist', async () => {
-      const tmpDir = '/tmp/gossip-prune-missing-' + Date.now();
+      const tmpDir = require('path').join(require('os').tmpdir(), 'gossip-prune-missing-' + Date.now());
       const p = new DispatchPipeline({
         projectRoot: tmpDir,
         workers: new Map([['test-agent', mockWorker('ok')]]),
@@ -712,7 +712,7 @@ describe('DispatchPipeline', () => {
 
       expect(fs.existsSync(path.join(tmpDir, '.gossip', 'relay-tasks.json'))).toBe(false);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); // Windows: the fire-and-forget git prune from the constructor may still hold the cwd
     });
   });
 });
