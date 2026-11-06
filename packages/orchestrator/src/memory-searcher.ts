@@ -50,7 +50,7 @@ export class MemorySearcher {
       try {
         const corpus = corpusDir(this.projectRoot);
         const content = readFileSync(join(corpus, filename), 'utf-8');
-        const body = content.replace(/^---[\s\S]*?\n---\n*/m, '');
+        const body = content.replace(/^---[\s\S]*?\n---(?:\r?\n)*/m, '');
         // Reuse keyword-based snippet extraction with the tokenized terms
         snippets = this.extractSnippets(body, terms);
       } catch { /* skip — sidecar result still returned without snippets */ }
@@ -121,7 +121,7 @@ export class MemorySearcher {
         try {
           const content = readFileSync(filePath, 'utf-8');
           const frontmatter = this.parseFrontmatter(content);
-          const body = content.replace(/^---[\s\S]*?---\n*/, '');
+          const body = content.replace(/^---[\s\S]*?---(?:\r?\n)*/, '');
 
           // Regression baseline: files with no frontmatter still appear, name falls back to basename.
           const name = frontmatter?.name || basename(file, '.md');

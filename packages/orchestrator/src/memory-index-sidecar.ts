@@ -262,7 +262,7 @@ function atomicWriteJson(path: string, data: unknown): void {
 
 function buildDocEntry(filename: string, content: string, mtime: number): MemoryIndexDoc {
   const frontmatter = parseMemoryFrontmatter(content);
-  const body = content.replace(/^---[\s\S]*?\n---\n*/m, '');
+  const body = content.replace(/^---[\s\S]*?\n---(?:\r?\n)*/m, '');
 
   const nameFromFrontmatter = frontmatter?.name;
   const name = nameFromFrontmatter || basename(filename, '.md');

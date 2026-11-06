@@ -80,7 +80,7 @@ function resolveSkillFilePath(agentId: string, category: string, skillRoot: stri
  * Does NOT recurse into YAML objects/lists — only scalar key: value lines.
  */
 function extractFrontmatterField(content: string, field: string): string | null {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fmMatch) return null;
 
   const lines = fmMatch[1].split('\n');
