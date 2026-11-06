@@ -915,7 +915,7 @@ async function doBoot() {
       const instrPath = j(process.cwd(), '.gossip', 'agents', ac.id, 'instructions.md');
       let instructions = '';
       if (ex(claudeAgentPath)) {
-        instructions = rf(claudeAgentPath, 'utf-8').replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+        instructions = rf(claudeAgentPath, 'utf-8').replace(/^---\r?\n[\s\S]*?\n---(?:\r?\n)*/, '').trim();
       } else if (ex(instrPath)) {
         instructions = rf(instrPath, 'utf-8');
       }

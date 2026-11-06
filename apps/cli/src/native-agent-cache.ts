@@ -170,7 +170,7 @@ export function refreshNativeAgentFromDisk(
   // Read the source file.
   let instructions = fs.readFileSync(sourcePath, 'utf-8');
   if (stripFrontmatter) {
-    instructions = instructions.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+    instructions = instructions.replace(/^---\r?\n[\s\S]*?\n---(?:\r?\n)*/, '').trim();
   }
 
   // Guard 2: empty-file clobber — the read produced an empty string but a
