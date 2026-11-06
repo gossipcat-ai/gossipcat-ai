@@ -2,9 +2,10 @@
  * Per-consumer watcher heartbeats (.gossip/bridge/watchers/<pid>.json) —
  * agent-inbox spec step 5.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { trySymlink } from '../helpers/symlink';
 import {
   clearWatcherHeartbeat, computeClaudeLink, countLiveWatchers, isWatcherListening, readWatcherHeartbeats,
   watcherConsumerPathFor, watcherHeartbeatPathFor, watchersDirFor, writeWatcherHeartbeat, WATCHER_PRUNE_MS, WATCHER_SCAN_MAX,
@@ -23,8 +24,8 @@ describe('per-consumer watcher heartbeats', () => {
     const now = Date.now();
     writeWatcherHeartbeat(root, now, A);
     writeWatcherHeartbeat(root, now + 1, B);
-    expect(statSync(watchersDirFor(root)).mode & 0o777).toBe(0o700);
-    expect(statSync(watcherConsumerPathFor(root, B)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(watchersDirFor(root)).mode & 0o777).toBe(0o700); // Windows has no POSIX mode bits
+    if (process.platform !== 'win32') expect(statSync(watcherConsumerPathFor(root, B)).mode & 0o777).toBe(0o600); // Windows has no POSIX mode bits
     expect(countLiveWatchers(root, now + 2)).toBe(2);
     expect(computeClaudeLink({ hasSink: false, channelConfirmed: false, projectRoot: root, now: now + 2 }))
       .toMatchObject({ state: 'listening', listeners: 2, last_seen: new Date(now + 1).toISOString() });
@@ -108,7 +109,7 @@ describe('per-consumer watcher heartbeats', () => {
       writeFileSync(stale, JSON.stringify({ pid: 4242, at: new Date(now - WATCHER_PRUNE_MS - 1000).toISOString() }));
       writeFileSync(join(target, `${A}.json`), JSON.stringify({ pid: A, at: new Date(now).toISOString() }));
       mkdirSync(join(root, '.gossip', 'bridge'), { recursive: true });
-      symlinkSync(target, watchersDirFor(root));
+      if (!trySymlink(target, watchersDirFor(root))) return; // Windows without symlink privilege
       writeWatcherHeartbeat(root, now, B);
       expect(existsSync(join(target, `${B}.json`))).toBe(false);
       expect(readWatcherHeartbeats(root, now)).toEqual([]);

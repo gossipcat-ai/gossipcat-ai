@@ -105,7 +105,8 @@ describe('installWorktreeSandboxHook', () => {
     installWorktreeSandboxHook(root);
     const hookPath = join(root, '.claude', 'hooks', 'worktree-sandbox.sh');
     const mode = statSync(hookPath).mode & 0o777;
-    expect(mode).toBe(0o755);
+    // Windows has no POSIX mode bits.
+    if (process.platform !== 'win32') expect(mode).toBe(0o755);
   });
 
   it('returns { installed: false } without throwing when the asset is missing', () => {

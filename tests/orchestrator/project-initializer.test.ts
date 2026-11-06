@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
 import { ProjectInitializer, ProjectInitializerConfig } from '../../packages/orchestrator/src/project-initializer';
 import type { ILLMProvider } from '../../packages/orchestrator/src/llm-client';
 import type { LLMResponse, ProjectSignals } from '../../packages/orchestrator/src/types';
+import { trySymlink } from '../helpers/symlink';
 
 const CATALOG_PATH = resolve(__dirname, '..', '..', 'data', 'archetypes.json');
 
@@ -75,7 +76,7 @@ describe('ProjectInitializer', () => {
     // Create a real file somewhere, then symlink it
     const realDir = mkdtempSync(join(tmpdir(), 'gossip-real-'));
     writeFileSync(join(realDir, 'tsconfig.json'), '{}');
-    symlinkSync(join(realDir, 'tsconfig.json'), join(tmpDir, 'tsconfig.json'));
+    if (!trySymlink(join(realDir, 'tsconfig.json'), join(tmpDir, 'tsconfig.json'))) return; // Windows without symlink privilege
 
     const init = new ProjectInitializer(makeConfig({ projectRoot: tmpDir }));
     const signals = init.scanDirectory(tmpDir);

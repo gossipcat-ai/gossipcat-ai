@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
+import { trySymlink } from '../helpers/symlink';
 
 import {
   resolveFindings,
@@ -224,7 +225,7 @@ describe('finding-resolver — path validation (test #3)', () => {
     const root = makeTempProject();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
     fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
-    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(root, 'leak.txt'));
+    if (!trySymlink(path.join(outside, 'secret.txt'), path.join(root, 'leak.txt'))) return; // Windows without symlink privilege
     const r = validatePath(root, 'leak.txt');
     expect(r.ok).toBe(false);
   });

@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import {
@@ -7,6 +7,7 @@ import {
   MAX_CLAIMS_PER_BLOCK,
 } from '../../packages/orchestrator/src/claim-verifier';
 import { sanitizeForLog } from '../../packages/orchestrator/src/_sanitize';
+import { trySymlink } from '../helpers/symlink';
 import type {
   ClaimBlock,
   CallsiteCountClaim,
@@ -297,7 +298,7 @@ function mkBlock(claims: Claim[]): ClaimBlock {
       const targetFile = join(outside, 'secret.txt');
       writeFileSync(targetFile, 'top secret\n', 'utf-8');
       // Symlink inside project points at an out-of-tree file.
-      symlinkSync(targetFile, join(projectRoot, 'leak.txt'));
+      if (!trySymlink(targetFile, join(projectRoot, 'leak.txt'))) return; // Windows without symlink privilege
 
       const block = mkBlock([
         {

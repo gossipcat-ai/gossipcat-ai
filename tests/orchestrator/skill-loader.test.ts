@@ -1,9 +1,10 @@
 import { loadSkills } from '@gossip/orchestrator';
 import { listAvailableSkills } from '../../packages/orchestrator/src/skill-loader';
 import { SkillIndex } from '../../packages/orchestrator/src/skill-index';
-import { mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { trySymlink } from '../helpers/symlink';
 
 describe('SkillLoader', () => {
   it('loads default skills by name', () => {
@@ -388,7 +389,7 @@ linked body
 `);
 
     const linkPath = join(tmpDir, '.gossip', 'agents', 'test-agent', 'skills', 'linked-skill.md');
-    symlinkSync(targetFile, linkPath);
+    if (!trySymlink(targetFile, linkPath)) return; // Windows without symlink privilege
     index.bind('test-agent', 'linked-skill', { source: 'config', mode: 'permanent' });
 
     const result = loadSkills('test-agent', [], tmpDir, index);

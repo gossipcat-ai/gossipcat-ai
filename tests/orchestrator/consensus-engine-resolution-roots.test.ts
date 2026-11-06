@@ -10,12 +10,12 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
-  symlinkSync,
   realpathSync,
   rmSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { trySymlink } from '../helpers/symlink';
 
 const makeLlm = (): any => ({
   generate: jest.fn(async () => ({ text: '[]', usage: { inputTokens: 0, outputTokens: 0 } })),
@@ -86,7 +86,7 @@ describe('ConsensusEngine resolutionRoots + findFile hardening', () => {
     // Create an external target to symlink to
     const outside = realpathSync(mkdtempSync(join(tmp, 'outside')));
     writeFileSync(join(outside, 'config.ts'), 'secret');
-    symlinkSync(outside, join(repo, 'packages', 'evil'));
+    if (!trySymlink(outside, join(repo, 'packages', 'evil'))) return; // Windows without symlink privilege
     const engine = new ConsensusEngine({
       llm: makeLlm(), registryGet: () => undefined, projectRoot: repo,
 

@@ -9,9 +9,9 @@ jest.mock('fs', () => {
 });
 
 import * as fs from 'fs';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import {
   resolveTaskImages,
   buildUserContent,
@@ -21,6 +21,7 @@ import {
   MAX_IMAGE_BYTES,
 } from '../../packages/orchestrator/src/task-images';
 import { ImageContent, TextContent } from '../../packages/types/src/tools';
+import { trySymlink } from '../helpers/symlink';
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
@@ -260,7 +261,7 @@ describe('task-images — image attachment resolution for relay dispatch', () =>
         // absolute path that normalizes out of the root.
         const sub = join(dir, 'sub');
         mkdirSync(sub);
-        const escape = join(sub, '..', '..', outside.split('/').pop()!, 'escape.png');
+        const escape = join(sub, '..', '..', basename(outside), 'escape.png');
         const r = resolveTaskImages({ task: 't', images: [escape], provider: 'openai', projectRoot: dir });
         expect(r.blocks).toEqual([]);
         expect(r.errors[0]).toMatch(/path policy/);
@@ -274,7 +275,7 @@ describe('task-images — image attachment resolution for relay dispatch', () =>
         const target = join(outside, 'real.png');
         writeFileSync(target, PNG_MAGIC);
         const link = join(dir, 'link.png');
-        symlinkSync(target, link);
+        if (!trySymlink(target, link)) return; // Windows without symlink privilege
         const r = resolveTaskImages({ task: 't', images: [link], provider: 'openai', projectRoot: dir });
         expect(r.blocks).toEqual([]);
         expect(r.errors[0]).toMatch(/path policy/);
@@ -310,7 +311,7 @@ describe('task-images — image attachment resolution for relay dispatch', () =>
     it('still accepts a symlink that stays INSIDE the root (open-first keeps legit symlinks working) (#654)', () => {
       const target = mk('target.png', PNG_MAGIC);
       const link = join(dir, 'alias.png');
-      symlinkSync(target, link);
+      if (!trySymlink(target, link)) return; // Windows without symlink privilege
       const r = resolveTaskImages({ task: 't', images: [link], provider: 'openai', projectRoot: dir });
       expect(r.errors).toEqual([]);
       expect(r.blocks).toHaveLength(1);
