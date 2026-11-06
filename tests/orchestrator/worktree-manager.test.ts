@@ -1,7 +1,7 @@
 import { WorktreeManager } from '../../packages/orchestrator/src/worktree-manager';
 import { execFileSync } from 'child_process';
 import { chmodSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 
 describe('WorktreeManager', () => {
@@ -59,7 +59,8 @@ describe('WorktreeManager', () => {
     const hookDir = join(testDir, '.git', 'hooks');
     const sentinel = join(tmpdir(), `gossip-hook-sentinel-${Date.now()}`);
     const hookPath = join(hookDir, 'pre-merge-commit');
-    writeFileSync(hookPath, `#!/bin/sh\ntouch ${sentinel}\nexit 0\n`);
+    // sh treats '\' as an escape, so hand it a quoted forward-slash path (Windows temp dirs use backslashes).
+    writeFileSync(hookPath, `#!/bin/sh\ntouch "${sentinel.split(sep).join('/')}"\nexit 0\n`);
     chmodSync(hookPath, 0o755);
 
     const { path } = await manager.create('test-hook');
