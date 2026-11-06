@@ -563,12 +563,12 @@ describe('MemoryWriter', () => {
         gossip: 'g', consensus: 'c', performance: 'p', gitLog: 'gl', raw: RAW_OPEN,
       });
 
-      expect(artifacts.knowledgePath).toContain('.gossip/agents/_project/memory/knowledge');
+      expect(artifacts.knowledgePath).toContain(join('.gossip', 'agents', '_project', 'memory', 'knowledge'));
       expect(artifacts.knowledgeContent).toContain('importance: 0.4');
-      expect(artifacts.nextSessionPath).toContain('.gossip/next-session.md');
+      expect(artifacts.nextSessionPath).toContain(join('.gossip', 'next-session.md'));
       expect(artifacts.nextSessionContent).toContain('Next Session');
-      expect(artifacts.gossipMemoryDir).toContain('.gossip/memory');
-      expect(artifacts.gossipMemoryPath).toContain('.gossip/memory/session_');
+      expect(artifacts.gossipMemoryDir).toContain(join('.gossip', 'memory'));
+      expect(artifacts.gossipMemoryPath).toContain(join('.gossip', 'memory', 'session_'));
       expect(artifacts.gossipMemoryPath.endsWith('.md')).toBe(true);
     });
 

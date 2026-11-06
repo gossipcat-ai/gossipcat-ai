@@ -24,11 +24,13 @@ import {
   formatCooldownMessage,
 } from '../../packages/orchestrator/src/skill-freshness';
 
+import { join } from 'path';
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const SKILL_ROOT = '/project';
 const AGENT_ID = 'gemini-reviewer';
 const CATEGORY = 'trust_boundaries';
-const SKILL_PATH = `/project/.gossip/agents/${AGENT_ID}/skills/trust-boundaries.md`;
+const SKILL_PATH = join(SKILL_ROOT, '.gossip', 'agents', AGENT_ID, 'skills', 'trust-boundaries.md');
 
 function makeSkillContent(boundAt: string | null, status: string | null): string {
   const fields = [

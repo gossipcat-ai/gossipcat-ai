@@ -81,7 +81,7 @@ describe('DispatchPipeline — resolutionRoots → relay tool-call scoping (Path
   });
 
   afterEach(() => {
-    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true });
   });
 

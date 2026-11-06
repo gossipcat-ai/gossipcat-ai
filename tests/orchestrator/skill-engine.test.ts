@@ -129,7 +129,7 @@ describe('SkillEngine', () => {
     expect(result.content).toContain('## Anti-Patterns');
     expect(result.content).toContain('## Quality Gate');
     expect(result.content).toContain('name: injection-audit');
-    expect(result.path).toContain('agent-a/skills/injection-vectors.md');
+    expect(result.path).toContain(join('agent-a', 'skills', 'injection-vectors.md'));
     expect(existsSync(result.path)).toBe(true);
     // Written file contains the LLM body verbatim plus bind-time snapshot
     // fields injected into frontmatter (baseline_correct, baseline_hallucinated,

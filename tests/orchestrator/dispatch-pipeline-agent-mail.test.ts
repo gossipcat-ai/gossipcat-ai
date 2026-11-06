@@ -24,7 +24,7 @@ describe('DispatchPipeline agent mail', () => {
     mkdirSync(join(root, '.gossip'));
     inbox = new ClaudeInbox(inboxDirFor(root));
   });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
   function worker(result: string) {
     const prompts: string[] = [];

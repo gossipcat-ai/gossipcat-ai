@@ -10,6 +10,7 @@
  * temp git repos that we initialize from scratch.
  */
 
+import { encodeProjectDirName } from '../../packages/orchestrator/src/memory-index-sidecar';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -752,7 +753,7 @@ describe('finding-resolver — resolveFindings', () => {
   test('Bucket B: finding citing auto-memory path produces skipped/not_source audit entry', async () => {
     const { root } = setupGitFixture();
     // Simulate an auto-memory path for this project root
-    const encoded = root.replace(/\//g, '-');
+    const encoded = encodeProjectDirName(root);
     const memPath = path.join(os.homedir(), '.claude', 'projects', encoded, 'memory', 'MEMORY.md');
     writeFinding(root, {
       taskId: 'memory-cite-test:f1',
