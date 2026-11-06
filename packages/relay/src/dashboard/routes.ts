@@ -1,3 +1,4 @@
+import { sep } from 'path';
 import { IncomingMessage, ServerResponse } from 'http';
 import { DashboardAuth } from './auth';
 import { handleEventsSSE } from './api-events';
@@ -985,7 +986,7 @@ export class DashboardRouter {
     try {
       const realFile = realpathSync(filePath);
       const realBase = realpathSync(this.dashboardRoot);
-      if (!realFile.startsWith(realBase + '/')) {
+      if (!realFile.startsWith(realBase + sep)) {
         res.writeHead(404);
         res.end();
         return true;
@@ -1044,7 +1045,7 @@ export class DashboardRouter {
         try {
           const filePath = join(reportsDir, f);
           const realFile = realpathSync(filePath);
-          if (!realFile.startsWith(realReportsDir + '/')) return null;
+          if (!realFile.startsWith(realReportsDir + sep)) return null;
           return normalizeLegacyDegradedFields(JSON.parse(readFileSync(realFile, 'utf-8')));
         } catch { return null; }
       }).filter(Boolean);

@@ -1,7 +1,7 @@
 import { CONTEXT_WINDOW_ERROR } from './llm-client';
 import { randomUUID } from 'crypto';
 import { existsSync, readFileSync, mkdirSync, realpathSync, appendFileSync, statSync, writeFileSync, renameSync } from 'fs';
-import { resolve as resolvePath, join } from 'path';
+import { resolve as resolvePath, join, sep } from 'path';
 import { AgentConfig, DispatchOptions, TaskEntry, TaskExecutionResult, PlanState, MIN_AGENTS_FOR_CONSENSUS } from './types';
 import { WorkerAgent } from './worker-agent';
 import { emitConsensusSignals } from './signal-helpers';
@@ -400,7 +400,7 @@ export class DispatchPipeline {
         const specPath = resolvePath(this.projectRoot, specRefs[0]);
         const realSpecPath = realpathSync(specPath);
         const realRoot = realpathSync(this.projectRoot);
-        if (realSpecPath.startsWith(realRoot + '/')) {
+        if (realSpecPath.startsWith(realRoot + sep)) {
           const specContent = readFileSync(realSpecPath, 'utf-8');
           const implFiles = extractSpecReferences(task, specContent);
           // Parse YAML front-matter to extract the spec's lifecycle status
