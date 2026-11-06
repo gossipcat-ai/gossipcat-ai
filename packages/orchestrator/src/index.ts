@@ -116,6 +116,7 @@ export {
   tokenize,
   sidecarPath,
   corpusDir,
+  encodeProjectDirName,
   tryAcquireLockOnce,
 } from './memory-index-sidecar';
 export type { MemoryIndex, MemoryIndexDoc, MemoryFrontmatter } from './memory-index-sidecar';

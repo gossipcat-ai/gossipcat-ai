@@ -221,10 +221,16 @@ export function sidecarPath(projectRoot: string): string {
  * preserved (e.g. /Users/goku/foo → -Users-goku-foo).
  */
 export function corpusDir(projectRoot: string): string {
-  // Claude Code encodes the project root as the directory name under
-  // ~/.claude/projects/. Every '/' (including the leading one) becomes '-'.
-  const encoded = projectRoot.replace(/\//g, '-');
-  return join(homedir(), '.claude', 'projects', encoded, 'memory');
+  return join(homedir(), '.claude', 'projects', encodeProjectDirName(projectRoot), 'memory');
+}
+
+/**
+ * Claude Code's directory name for a project root under ~/.claude/projects/.
+ * Every '/' (including the leading one) becomes '-'. On Windows the separators
+ * are '\' and the drive colon is dropped too: C:\dev\x becomes C--dev-x.
+ */
+export function encodeProjectDirName(projectRoot: string): string {
+  return process.platform === 'win32' ? projectRoot.replace(/[\/:]/g, '-') : projectRoot.replace(/\//g, '-');
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +242,7 @@ function atomicWriteJson(path: string, data: unknown): void {
   let fd: number | undefined;
   try {
     writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-    fd = openSync(tmp, 'r');
+    fd = openSync(tmp, 'r+'); // 'r+': Windows FlushFileBuffers needs write access (EPERM on a read-only handle)
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
@@ -560,7 +566,7 @@ function atomicWriteText(path: string, content: string): void {
   let fd: number | undefined;
   try {
     writeFileSync(tmp, content, 'utf-8');
-    fd = openSync(tmp, 'r');
+    fd = openSync(tmp, 'r+'); // 'r+': Windows FlushFileBuffers needs write access (EPERM on a read-only handle)
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;

@@ -328,7 +328,7 @@ import { MAX_TOOL_TURNS_CEILING, MCP_MAIN_PROVIDER_ENUM, MCP_CUSTOM_PROVIDER_ENU
 import { getGossipcatVersion } from './version';
 import { captureGitStatus, checkUnexpectedChanges } from './utility-guard';
 import { selectUtilityFallbackProvider } from './utility-provider';
-import { buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
+import { encodeProjectDirName, buildUtilityAgentPrompt, getUncategorizedStatusLine, checkDistMcpStaleness, logStalenessToMcpLog, isValidCategory, seedPermanentDefaults, GLOBAL_PERMANENT_DEFAULTS, IMPLEMENTER_PERMANENT_DEFAULTS, RESEARCHER_REVIEWER_PERMANENT_DEFAULTS } from '@gossip/orchestrator';
 
 // Prime the dist-mcp staleness cache from the running bundle path. In the bundled
 // CJS output (dist-mcp/mcp-server.js) __filename resolves to the bundle file, so
@@ -381,7 +381,7 @@ import { homedir } from 'os';
  * — kept inline here to avoid importing a dashboard module from MCP boot path.
  */
 function memoryDirForProject(cwd: string): string {
-  return join(homedir(), '.claude', 'projects', cwd.replaceAll('/', '-'), 'memory');
+  return join(homedir(), '.claude', 'projects', encodeProjectDirName(cwd), 'memory');
 }
 
 /**
