@@ -39,6 +39,7 @@ export {
   QuotaExhaustedException,
   PROVIDER_PLACEHOLDER_RE,
   isReasoningModel,
+  raiseFetchTimeouts,
 } from './llm-client';
 export type { ILLMProvider, LLMGenerateOptions } from './llm-client';
 export { recordAuthFailure, clearAuthFailure, readRecentAuthFailures } from './auth-state';

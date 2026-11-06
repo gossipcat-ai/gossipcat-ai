@@ -462,6 +462,40 @@ let runtimeGuardsInstalled = false;
  * The boot-failure path keeps its own `main().catch(... process.exit(1))` — that
  * is a genuine fatal and is intentionally left untouched.
  */
+/** Absolute paths named in a task that lie outside the project root. */
+function outsideProjectPaths(task: string, root: string): string[] {
+  const { resolve, sep } = require('path');
+  const base = resolve(root).toLowerCase() + sep;
+  const found = task.match(/(?:\b[A-Za-z]:[\\/]|(?<![\w.])\/(?:home|Users|mnt|tmp|var|opt|srv)\/)[^\s"'`<>|)]+/g) ?? [];
+  return [...new Set(found.map(p => p.replace(/[.,;:]+$/, '')))].filter(p => !(resolve(p).toLowerCase() + sep).startsWith(base));
+}
+
+/**
+ * Consensus can outlast the host's tool timeout. The work runs in the background;
+ * a call returns at timeout_ms, and repeating it joins the same run.
+ * ponytail: one in-memory run per task set, lost on server restart.
+ */
+const collectRuns = new Map<string, Promise<any>>();
+async function collectWithin<T>(key: string, timeoutMs: number, start: () => Promise<T>): Promise<T | null> {
+  let run = collectRuns.get(key);
+  if (!run) {
+    run = start();
+    collectRuns.set(key, run);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>(r => { timer = setTimeout(() => r(null), timeoutMs); });
+  try {
+    const out = await Promise.race([run, expired]);
+    if (out !== null) collectRuns.delete(key);
+    return out;
+  } catch (err) {
+    collectRuns.delete(key);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function installRuntimeRejectionGuards(): void {
   if (runtimeGuardsInstalled) return;
   runtimeGuardsInstalled = true;
@@ -1854,6 +1888,15 @@ export function createMcpServer(): McpServer {
       // now built on the generic RoundWarning shape rather than the old bespoke
       // prependResolutionRootWarning.
       const dispatchWarnings: import('@gossip/orchestrator').RoundWarning[] = [];
+      if (!resolutionRoots?.length) {
+        const named = [...(task ? [task] : []), ...(tasks ?? []).map(t => t.task)].flatMap(t => outsideProjectPaths(t, process.cwd()));
+        for (const p of new Set(named)) {
+          dispatchWarnings.push({
+            code: 'roots_rejected',
+            message: `task names ${p}, outside the project root; relay agents can't read it and may review the project copy instead. Pass resolutionRoots.`,
+          });
+        }
+      }
       if (resolutionRoots && resolutionRoots.length > 0) {
         const { validateResolutionRoot } = await import('@gossip/orchestrator');
         for (const raw of resolutionRoots) {
@@ -1936,7 +1979,7 @@ export function createMcpServer(): McpServer {
     'Collect results from dispatched tasks. Waits for completion by default. Use consensus: true for cross-review round.',
     {
       task_ids: z.array(z.string()).default([]).describe('Task IDs to collect. Empty array for all.'),
-      timeout_ms: z.number().default(300000).describe('Max wait time in ms. Default 5 minutes.'),
+      timeout_ms: z.number().default(150000).describe('Max wait time in ms. Default 150 s, under common MCP client limits. With consensus, a call that runs out returns "still running"; repeat the same call to rejoin.'),
       consensus: z.boolean().default(false).describe('Enable cross-review consensus. Agents review each others findings.'),
       // #126 PR-B: primary surface — collect-time resolutionRoots flow into
       // every ConsensusEngine construction site (this is the ONE moment they
@@ -2048,7 +2091,16 @@ export function createMcpServer(): McpServer {
         resolutionRoots: validated ?? [],
         warnings: round.warnings,
       });
-      const collectResult = await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format, finalRound);
+      const collectResult = consensus
+        ? await collectWithin(
+            JSON.stringify([...task_ids].sort()),
+            timeout_ms,
+            () => handleCollect(task_ids, Math.max(timeout_ms, 600_000), consensus, validated, prompt_format, finalRound),
+          )
+        : await handleCollect(task_ids, timeout_ms, consensus, validated, prompt_format, finalRound);
+      if (!collectResult) {
+        return { content: [{ type: 'text' as const, text: `Consensus still running after ${Math.round(timeout_ms / 1000)} s. Repeat this gossip_collect call to rejoin it; nothing is lost.` }] };
+      }
       // handleCollect renders a "⚠ Round warnings:" block only when a
       // consensusReport was built AND it carried warnings (the PR-A drain path).
       // That path requires consensus:true AND ≥2 completed results. When fewer
@@ -6382,6 +6434,7 @@ async function main() {
   // #522: arm last-resort guards before anything can dispatch a background task,
   // so a rejecting task promise logs-and-continues instead of crash-looping.
   installRuntimeRejectionGuards();
+  await (await import('@gossip/orchestrator')).raiseFetchTimeouts();
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

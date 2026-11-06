@@ -1,3 +1,4 @@
+import { CONTEXT_WINDOW_ERROR } from './llm-client';
 import { randomUUID } from 'crypto';
 import { existsSync, readFileSync, mkdirSync, realpathSync, appendFileSync, statSync, writeFileSync, renameSync } from 'fs';
 import { resolve as resolvePath, join } from 'path';
@@ -663,13 +664,26 @@ export class DispatchPipeline {
               this.pruneRelayTaskRecord(entry.id);
               // Emit task_completed with error:true so downstream scorers get failure-rate
               // and latency data from relay tasks (consensus bac850a6-eeb048e3, f2).
-              emitCompletionSignals(this.projectRoot, {
-                agentId: entry.agentId,
-                taskId: entry.id,
-                result: '',
-                elapsedMs,
-                error: true,
-              });
+              if (event.payload.error?.includes(CONTEXT_WINDOW_ERROR)) {
+                // Server configuration, not agent quality: no failure signal.
+                emitConsensusSignals(this.projectRoot, [{
+                  type: 'consensus',
+                  signal: 'transport_failure',
+                  agentId: entry.agentId,
+                  taskId: entry.id,
+                  evidence: event.payload.error.slice(0, 300),
+                  timestamp: new Date().toISOString(),
+                  source: 'auto',
+                }]);
+              } else {
+                emitCompletionSignals(this.projectRoot, {
+                  agentId: entry.agentId,
+                  taskId: entry.id,
+                  result: '',
+                  elapsedMs,
+                  error: true,
+                });
+              }
             } catch { /* best-effort */ }
             throw new Error(event.payload.error);
           default:

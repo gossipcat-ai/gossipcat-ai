@@ -561,7 +561,28 @@ export class AnthropicProvider implements ILLMProvider {
  * match. Routing only changes inside OpenAIProvider (see `generate`).
  */
 export function isReasoningModel(model: string): boolean {
-  return /^gpt-(?:[5-9]|[1-9]\d)/i.test(model) || /^o[0-9]/i.test(model);
+  const name = model.split('/').pop() ?? model; // gateways prefix: openai/gpt-5.5
+  return /^gpt-(?:[5-9]|[1-9]\d)/i.test(name) || /^o[0-9]/i.test(name);
+}
+
+/** Marks a server context-window rejection: server configuration, not agent quality. */
+export const CONTEXT_WINDOW_ERROR = 'CONTEXT_WINDOW_EXCEEDED';
+const CONTEXT_WINDOW_RE = /exceed_context_size_error|context_length_exceeded|maximum context length/i;
+
+/**
+ * Node's fetch stops at undici's 300 s headers/body limits regardless of the
+ * AbortSignal, which kills slow non-streaming local models. Replace the global
+ * dispatcher with one of Node's own Agent class, so its version always matches.
+ * ponytail: relies on undici's global-dispatcher symbol; a no-op if that goes away.
+ */
+export async function raiseFetchTimeouts(timeoutMs = 660_000): Promise<boolean> {
+  await fetch('data:,').catch(() => {}); // fetch loads undici lazily
+  // Node 26 keeps the real Agent under .2 (.1 is a compatibility wrapper); Node 22 under .1.
+  const key = [2, 1].map(n => Symbol.for(`undici.globalDispatcher.${n}`)).find(k => k in globalThis);
+  if (!key) return false;
+  const g = globalThis as unknown as Record<symbol, { constructor: new (o: object) => unknown }>;
+  g[key] = new g[key].constructor({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs }) as (typeof g)[symbol];
+  return true;
 }
 
 /** 400 body naming an unsupported `temperature` value or parameter. */
@@ -673,7 +694,9 @@ export class OpenAIProvider implements ILLMProvider {
     // non-default temperature; OpenAI-compatible reuses keep both.
     const strictReasoning = this.isCanonicalOpenAI && isReasoningModel(this.model);
     if (options?.maxTokens) body[strictReasoning ? 'max_completion_tokens' : 'max_tokens'] = options.maxTokens;
-    if (options?.temperature !== undefined && !strictReasoning) body.temperature = options.temperature;
+    // A gateway-prefixed reasoning name (openai/gpt-5.5) still rejects temperature.
+    const gatewayReasoning = this.model.includes('/') && isReasoningModel(this.model);
+    if (options?.temperature !== undefined && !strictReasoning && !gatewayReasoning) body.temperature = options.temperature;
     if (options?.tools?.length) {
       body.tools = options.tools.map(t => ({
         type: 'function',
@@ -751,6 +774,9 @@ export class OpenAIProvider implements ILLMProvider {
       // endpoint — it's the endpoint itself asking for /responses, which is safe.
       if (options?.tools?.length && RESPONSES_REQUIRED_RE.test(fullBody)) {
         return this.generateViaResponses(messages, options);
+      }
+      if (CONTEXT_WINDOW_RE.test(fullBody)) {
+        throw new Error(`${CONTEXT_WINDOW_ERROR}: the prompt is larger than the context window of model "${this.model}" at ${this.baseUrl}. Raise the server's context size (llama.cpp: --ctx-size) or send a smaller task. Server said: ${body}`);
       }
       throw new Error(`OpenAI API error (${res.status}): ${body}`);
     }
@@ -1279,7 +1305,7 @@ export const CREATE_PROVIDER_CASES = ['anthropic', 'openai', 'deepseek', 'grok',
 export function createProvider(provider: string, model: string, apiKey?: string, projectRoot?: string, baseUrl?: string, authSlot?: string): ILLMProvider {
   switch (provider) {
     case 'anthropic': return new AnthropicProvider(apiKey!, model, projectRoot, authSlot);
-    case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined, undefined, undefined, authSlot);
+    case 'openai': return new OpenAIProvider(apiKey ?? '', model, projectRoot, baseUrl, baseUrl ? `openai:${baseUrl}` : undefined, baseUrl ? 600_000 : undefined, undefined, authSlot);
     // DeepSeek is OpenAI-wire-compatible — reuse OpenAIProvider. Default the
     // base_url to api.deepseek.com/v1 (an explicit base_url still overrides),
     // give it a 'deepseek' quota slot, and a 'DeepSeek' label so 401/403 auth
